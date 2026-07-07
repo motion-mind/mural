@@ -1,11 +1,8 @@
 #include "movement.h"
-#include "display.h"
 #include <stdexcept>
 
-Movement::Movement(Display *display)
+Movement::Movement()
 {
-    this->display = display;
-   
     leftMotor = new AccelStepper(AccelStepper::DRIVER, LEFT_STEP_PIN, LEFT_DIR_PIN);
     leftMotor->setEnablePin(LEFT_ENABLE_PIN);
     leftMotor->setMaxSpeed(moveSpeedSteps);
@@ -111,7 +108,7 @@ int Movement::extendToHome()
 
     auto homeCoordinates = getHomeCoordinates();
     startedHoming = true;
-    auto moveTime = beginLinearTravel(homeCoordinates.x, homeCoordinates.y, moveSpeedSteps);
+    auto moveTime = beginLinearTravel(homeCoordinates.x, homeCoordinates.y, homeReturnSpeedMmPerSec);
     return int(ceil(moveTime));
 };
 
@@ -332,8 +329,10 @@ Movement::Lengths Movement::getBeltLengths(const double x, const double y) {
     return Lengths(leftLegSteps, rightLegSteps);
 }
 
-float Movement::beginLinearTravel(double x, double y, int speed)
+float Movement::beginLinearTravel(double x, double y, double speedMmPerSec)
 {
+    auto prevX = X;
+    auto prevY = Y;
     X = x;
     Y = y;
     if (topDistance == -1 || !homed) {
@@ -353,6 +352,12 @@ float Movement::beginLinearTravel(double x, double y, int speed)
         throw std::invalid_argument("Invalid y");
     }
 
+    // Clamp defensively - see MAX_ALLOWED_SPEED_MM_PER_SEC's comment in movement.h.
+    // The lower bound avoids a division by ~0 below turning a slow-but-valid move into
+    // an effectively infinite moveTime.
+    constexpr double MIN_SPEED_MM_PER_SEC = 0.1;
+    speedMmPerSec = constrain(speedMmPerSec, MIN_SPEED_MM_PER_SEC, MAX_ALLOWED_SPEED_MM_PER_SEC);
+
     auto lengths = getBeltLengths(x, y);
     auto leftLegSteps = lengths.left;
     auto rightLegSteps = lengths.right;
@@ -360,19 +365,21 @@ float Movement::beginLinearTravel(double x, double y, int speed)
     auto deltaLeft = int(abs(abs(leftMotor->currentPosition()) - leftLegSteps));
     auto deltaRight = int(abs(abs(rightMotor->currentPosition()) - rightLegSteps));
 
-    float leftSpeed, rightSpeed, moveTime;
-    if (deltaLeft >= deltaRight)
-    {
-        leftSpeed = speed;
-        moveTime = deltaLeft / leftSpeed;
-        rightSpeed = deltaRight / moveTime;
+    // Actual straight-line pen-tip distance for this hop, in mm. Floored so a
+    // (near-)duplicate point can't turn into a division by ~0 below - if this happens,
+    // deltaLeft/deltaRight will also be ~0, so the resulting speeds don't matter much
+    // beyond staying finite.
+    constexpr double MIN_SEGMENT_DISTANCE_MM = 0.001;
+    double segmentDistanceMm = prevX >= 0 && prevY >= 0
+        ? distanceBetweenPoints(Point(prevX, prevY), Point(x, y))
+        : 0;
+    if (segmentDistanceMm < MIN_SEGMENT_DISTANCE_MM) {
+        segmentDistanceMm = MIN_SEGMENT_DISTANCE_MM;
     }
-    else
-    {
-        rightSpeed = speed;
-        moveTime = deltaRight / rightSpeed;
-        leftSpeed = deltaLeft / moveTime;
-    }
+
+    float moveTime = segmentDistanceMm / speedMmPerSec;
+    float leftSpeed = deltaLeft / moveTime;
+    float rightSpeed = deltaRight / moveTime;
 
     //Serial.printf("Begin movement: X(%s) Y(%s) UnsafeX(%s) UnsafeY(%s) leftLeg(%s) rightLeg(%s) deltaLeft(%s) deltaRight(%s) leftSpeed(%s) rightSpeed(%s) \n", String(x), String(y), String(unsafeX), String(unsafeY), String(leftLeg), String(rightLeg), String(deltaLeft), String(deltaRight), String(leftSpeed), String(rightSpeed));
     leftMotor->moveTo(leftLegSteps);
@@ -381,7 +388,6 @@ float Movement::beginLinearTravel(double x, double y, int speed)
     rightMotor->moveTo(rightLegSteps);
     rightMotor->setSpeed(rightSpeed);
 
-    //display->displayText(String(X) + ", " + String(Y));
     // delay(sleepDurationAfterMove_ms);
 
     moving = true;

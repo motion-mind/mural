@@ -18,16 +18,17 @@ bool arePointsEqual(Movement::Point point1, Movement::Point point2) {
     return point1.x == point2.x && point1.y == point2.y;
 }
 
-InterpolatingMovementTask::InterpolatingMovementTask(Movement *movement, Movement::Point target) {
+InterpolatingMovementTask::InterpolatingMovementTask(Movement *movement, Movement::Point target, double speedMmPerSec) {
     this->target = target;
     this->movement = movement;
+    this->speedMmPerSec = speedMmPerSec;
 }
 
 void InterpolatingMovementTask::startRunning() {
-    Serial.printf("Starting the move to %.1f, %.1f\n", target.x, target.y);
+    Serial.printf("Starting the move to %.1f, %.1f at %.1fmm/s\n", target.x, target.y, speedMmPerSec);
     auto currentCoordinates = movement->getCoordinates();
     auto incrementPoint = getNextIncrement(currentCoordinates, target);
-    movement->beginLinearTravel(incrementPoint.x, incrementPoint.y, printSpeedSteps);
+    movement->beginLinearTravel(incrementPoint.x, incrementPoint.y, speedMmPerSec);
 }
 
 bool InterpolatingMovementTask::isDone() {
@@ -41,7 +42,7 @@ bool InterpolatingMovementTask::isDone() {
     }
 
     auto incrementPoint = getNextIncrement(movement->getCoordinates(), target);
-    movement->beginLinearTravel(incrementPoint.x, incrementPoint.y, printSpeedSteps);
+    movement->beginLinearTravel(incrementPoint.x, incrementPoint.y, speedMmPerSec);
     
     return false;
 }

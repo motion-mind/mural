@@ -5,13 +5,14 @@
 #include "pen.h"
 #include "runner.h"
 #include <ESPAsyncWebServer.h>
+class PenCalibrationPhase;
 class PhaseManager {
     private:
     Phase* currentPhase;
     Phase* retractBeltsPhase;
     Phase* setTopDistancePhase;
     Phase* extendToHomePhase;
-    Phase* penCalibrationPhase;
+    PenCalibrationPhase* penCalibrationPhase;
     Phase* svgSelectPhase;
     Phase* beginDrawingPhase;
     Movement* movement;

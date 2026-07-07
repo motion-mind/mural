@@ -41,6 +41,7 @@ async function render(request: RequestTypes.RenderSVGRequest) {
         type: "renderer",
         payload: {
             commands: renderResult.commands,
+            binary: renderResult.binary,
             svgJson: resultSvgJson,
             distance: renderResult.distance,
             drawDistance: renderResult.drawDistance,

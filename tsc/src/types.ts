@@ -4,6 +4,8 @@ export type updateStatusFn = (status: string) => void;
 export type CoordinateCommand = {
     x: number;
     y: number;
+    speed?: number; // mm/s - populated by velocityPlanner.ts, optional so existing
+                     // construction sites (renderer.ts) don't need to change
 }
 
 export type PenUpCommand = 'p0';

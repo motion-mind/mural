@@ -39,7 +39,12 @@ void doSlowMove(Pen* pen, int startDegree, int targetDegree, int speedDegPerSec)
         currentDegree = startDegree + progressDegrees;
     }
     pen->setRawValue(targetDegree);
-    delay(200);
+
+    // Every real pen transition now covers exactly PEN_UP_DEGREES - PEN_DOWN_DEGREES
+    // (the down position is a fixed constant, not a per-session calibrated value - see
+    // pen.h), so there's one fixed settle time for a full swing rather than a per-move
+    // estimate based on distance.
+    delay(PEN_SETTLE_MS);
 }
 
 
@@ -47,8 +52,8 @@ Pen::Pen()
 {
     servo = new Servo();
     servo->attach(2);
-    servo->write(90);
-    currentPosition = 90;
+    servo->write(PEN_UP_DEGREES);
+    currentPosition = PEN_UP_DEGREES;
 }
 
 void Pen::setRawValue(int rawValue) {
@@ -56,29 +61,16 @@ void Pen::setRawValue(int rawValue) {
     currentPosition = rawValue;
 }
 
-void Pen::setPenDistance(int value) {
-    Serial.println("Pen distance angle set to " + String(value));
-    this->penDistance = value;
-}
-
 void Pen::slowUp() {
-    if (penDistance == -1) {
-        throw std::invalid_argument("not ready");
-    }
-
-    doSlowMove(this, currentPosition, 90, slowSpeedDegPerSec);
-    currentPosition = 90;
+    doSlowMove(this, currentPosition, PEN_UP_DEGREES, slowSpeedDegPerSec);
+    currentPosition = PEN_UP_DEGREES;
 }
 
 void Pen::slowDown() {
-    if (penDistance == -1) {
-        throw std::invalid_argument("not ready");
-    }
-
-    doSlowMove(this, currentPosition, penDistance, slowSpeedDegPerSec);
-    currentPosition = penDistance;
+    doSlowMove(this, currentPosition, PEN_DOWN_DEGREES, slowSpeedDegPerSec);
+    currentPosition = PEN_DOWN_DEGREES;
 }
 
 bool Pen::isDown() {
-    return currentPosition == penDistance;
+    return currentPosition == PEN_DOWN_DEGREES;
 }

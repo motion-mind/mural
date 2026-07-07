@@ -43,6 +43,7 @@ void PhaseManager::setPhase(PhaseNames name) {
         case PhaseNames::PenCalibration:
             Serial.println("PenCalibration");
             currentPhase = penCalibrationPhase;
+            penCalibrationPhase->onEnter();
             break;
         case PhaseNames::SvgSelect:
             Serial.println("SvgSelect");

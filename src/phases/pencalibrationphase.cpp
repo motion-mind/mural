@@ -12,10 +12,11 @@ void PenCalibrationPhase::setServo(AsyncWebServerRequest *request) {
     request->send(200, "text/plain", "OK"); 
 }
 
-void PenCalibrationPhase::setPenDistance(AsyncWebServerRequest *request) {
-    const AsyncWebParameter* p = request->getParam(0);
-    int angle = p->value().toInt();
-    pen->setPenDistance(angle);
+void PenCalibrationPhase::onEnter() {
+    pen->slowDown();
+}
+
+void PenCalibrationPhase::confirmPenCalibration(AsyncWebServerRequest *request) {
     pen->slowUp();
     manager->setPhase(PhaseManager::BeginDrawing);
     manager->respondWithState(request);

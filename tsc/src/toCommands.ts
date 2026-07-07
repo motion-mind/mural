@@ -2,12 +2,15 @@ import { Command, RequestTypes, updateStatusFn } from './types';
 import { generatePaths } from './generator';
 import { generateInfills } from './infill';
 import { optimizePaths } from './optimizer';
+import { orOptimizePaths } from './orOpt';
 import { renderPathsToCommands } from './renderer';
 import { trimCommands } from './trimmer';
 import { dedupeCommands } from './deduplicator';
 import { measureDistance } from './measurer';
 import { loadPaper } from './paperLoader';
 import { flattenPaths } from './flattener';
+import { encodeCommandsBinary } from './binaryFormat';
+import { planVelocities } from './velocityPlanner';
 
 const paper = loadPaper();
 
@@ -41,9 +44,10 @@ export async function renderSvgJsonToCommands(
 
     updateStatusFn("Optimizing paths");
     const optimizedPaths = optimizePaths(pathsWithInfills, request.homeX, request.homeY);
+    const orOptimizedPaths = orOptimizePaths(optimizedPaths, request.homeX, request.homeY, updateStatusFn);
 
     updateStatusFn("Generating commands");
-    const commands = renderPathsToCommands(optimizedPaths, request.width, request.height);
+    const commands = renderPathsToCommands(orOptimizedPaths, request.width, request.height);
     commands.push('p0');
 
     const trimmedCommands = trimCommands(commands);
@@ -52,15 +56,25 @@ export async function renderSvgJsonToCommands(
 
     const dedupedCommands = dedupeCommands(trimmedCommands);
 
-    updateStatusFn("Measuring total distance");
-    dedupedCommands.unshift(`h${request.height}`);
-    const distances = measureDistance(dedupedCommands);
-    const totalDistance = +distances.totalDistance.toFixed(1);
-    dedupedCommands.unshift(`d${totalDistance}`);
+    updateStatusFn("Planning velocity");
+    const speedPlannedCommands = planVelocities(dedupedCommands);
 
-    const commandStrings = dedupedCommands.map(stringifyCommand);
+    updateStatusFn("Measuring total distance");
+    speedPlannedCommands.unshift(`h${request.height}`);
+    const distances = measureDistance(speedPlannedCommands);
+    const totalDistance = +distances.totalDistance.toFixed(1);
+    speedPlannedCommands.unshift(`d${totalDistance}`);
+
+    const commandStrings = speedPlannedCommands.map(stringifyCommand);
+
+    // commandStrings/commands (below) is kept around purely so the browser can render
+    // the on-screen preview via renderCommandsToSvgJson - it's never uploaded anymore.
+    updateStatusFn("Encoding binary job");
+    const binary = encodeCommandsBinary(speedPlannedCommands, totalDistance, request.height);
+
     return {
         commands: commandStrings,
+        binary,
         distance: totalDistance,
         drawDistance: +distances.drawDistance.toFixed(1),
     };

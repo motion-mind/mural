@@ -1,0 +1,1343 @@
+diff --git a/data/www/index.html b/data/www/index.html
+index 31959a2..dbfa760 100644
+--- a/data/www/index.html
++++ b/data/www/index.html
+@@ -105,17 +105,8 @@
+       </div>
+       <div id="penCalibrationSlide" class="muralSlide" style="display:none;">
+         <h3 class="mb-2 fw-normal">Pen calibration</h3>
+-        <h6 class="mb-5"><small class="text-muted">Insert the pen so it's close to, but not touching the wall and secure it with a bolt. Then, adjust the pen position so the pen is touching the wall</small></h6>
+-        <input type="range" class="form-range mb-5 text-center" min="0" max="90" id="servoRange" value="0">
+-        <div class="btn-group mb-3 btn-group-lg" role="group">
+-          <div class="btn-group me-3" role="group">
+-            <button type="button" class="btn btn-primary fs-4" id="penMinus">-</button>
+-          </div>
+-          <div class="btn-group me-3" role="group">
+-            <button type="button" class="btn btn-primary fs-4" id="penPlus">+</button>
+-          </div>
+-        </div>
+-        <button class="w-100 btn btn-lg btn-primary mb-5" id="setPenDistance">Pen is touching the wall</button>
++        <h6 class="mb-5"><small class="text-muted">The pen has moved to its writing position. Loosen the pen holder's bolt and slide the pen down until it's just touching the wall, then tighten the bolt again</small></h6>
++        <button class="w-100 btn btn-lg btn-primary mb-5" id="confirmPenCalibration">Pen is touching the wall</button>
+       </div>
+       <div id="svgUploadSlide" class="muralSlide" style="display:none;">
+         <h3 class="mb-2 fw-normal">Select SVG Image</h3>
+diff --git a/data/www/main.js b/data/www/main.js
+index 1cfd225..546ebd4 100644
+--- a/data/www/main.js
++++ b/data/www/main.js
+@@ -96,44 +96,12 @@ function init() {
+             await checkIfExtendedToHome(extendToHomeTime);
+         });
+     });
+-    
+-    function getServoValueFromInputValue() {
+-        const inputValue = parseInt($("#servoRange").val());
+-        const value = 90 - inputValue;
+-        let normalizedValue;
+-        if (value < 0) {
+-            normalizedValue = 0;
+-        } else if (value > 90) {
+-            normalizedValue = 90;
+-        } else {
+-            normalizedValue = value;
+-        }
+-
+-        return normalizedValue;
+-    }
+-
+-    $("#servoRange").on('input', $.throttle(250, function (e) {
+-        const servoValue = getServoValueFromInputValue();
+-        $.post("/setServo", {angle: servoValue});
+-    }));
+-
+-    const stepVaule = 5;
+-    $("#penMinus").click(function() {
+-        $("#servoRange")[0].stepDown(stepVaule);
+-        $("#servoRange").trigger('input');
+-    });
+-
+-    $("#penPlus").click(function() {
+-        $("#servoRange")[0].stepUp(stepVaule);
+-        $("#servoRange").trigger('input');
+-    });
+ 
+-    $("#setPenDistance").click(function () {
+-        const inputValue = getServoValueFromInputValue();
++    $("#confirmPenCalibration").click(function () {
+         doneWithPhase({
+-            url: "/setPenDistance",
+-            data: {angle: inputValue},
+-            commandName: "Set Pen Distance",
++            url: "/confirmPenCalibration",
++            data: {},
++            commandName: "Confirm Pen Calibration",
+         });
+     });
+ 
+@@ -264,7 +232,7 @@ function init() {
+             } else if (e.data.type === 'renderer') {
+                 console.log("Worker finished!");
+ 
+-                uploadConvertedCommands = e.data.payload.commands.join('\n');
++                uploadConvertedCommands = e.data.payload.binary; // ArrayBuffer, uploaded as-is
+                 const resultSvgJson = e.data.payload.svgJson;
+                 const resultDataUrl = svgControl.convertJsonToDataURL(resultSvgJson, svgControl.getTargetWidth(), svgControl.getTargetHeight());
+ 
+@@ -352,7 +320,7 @@ function init() {
+         $("#acceptSvg").attr("disabled", "disabled");
+ 
+         const commandsBlob = new Blob([uploadConvertedCommands], {
+-            type: "text/plain"
++            type: "application/octet-stream"
+         });
+ 
+         $(".muralSlide").hide();
+@@ -527,7 +495,6 @@ function adaptToState(state) {
+             }
+             break;
+         case "PenCalibration":
+-            $.post("/setServo", {angle: 90});
+             $("#penCalibrationSlide").show();
+             break;
+         case "SvgSelect":
+diff --git a/platformio.ini b/platformio.ini
+index 860caad..224ce65 100644
+--- a/platformio.ini
++++ b/platformio.ini
+@@ -21,6 +21,5 @@ lib_deps =
+ 	https://github.com/tzapu/WiFiManager.git@2.0.17
+ 	https://github.com/ESP32Async/ESPAsyncWebServer.git@^3.7.4
+ 	https://github.com/madhephaestus/ESP32Servo.git@^3.0.9
+-	https://github.com/adafruit/Adafruit_SSD1306.git@^2.5.13
+ 	waspinator/AccelStepper@^1.64
+ 	bblanchon/ArduinoJson@^5.13.4
+diff --git a/src/display.cpp b/src/display.cpp
+deleted file mode 100644
+index 12f2504..0000000
+--- a/src/display.cpp
++++ /dev/null
+@@ -1,59 +0,0 @@
+-#include "display.h"
+-#include <Adafruit_SSD1306.h>
+-
+-#define SCREEN_WIDTH 128 // OLED display width, in pixels
+-#define SCREEN_HEIGHT 64 // OLED display height, in pixels
+-Display::Display() {
+-    display = new Adafruit_SSD1306(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
+-    if (!display->begin(SSD1306_SWITCHCAPVCC, 0x3C))
+-    { // Address 0x3D for 128x64
+-        Serial.println(F("SSD1306 allocation failed"));
+-        throw std::invalid_argument("not ready");
+-    }
+-    delay(2000);
+-    display->setRotation(2);
+-    display->clearDisplay();
+-    display->setTextColor(WHITE);
+-    display->setTextSize(1);
+-    display->display();
+-}
+-
+-void Display::displayText(String text)
+-{
+-    int16_t x1;
+-    int16_t y1;
+-    uint16_t width;
+-    uint16_t height;
+-
+-    display->getTextBounds(text, 0, 0, &x1, &y1, &width, &height);
+-
+-    // display on horizontal and vertical center
+-    display->clearDisplay(); // clear display
+-    display->setCursor((SCREEN_WIDTH - width) / 2, (SCREEN_HEIGHT - height) / 2);
+-    display->println(text); // text to display
+-    display->display();
+-    Serial.println("Displayed " + text);
+-}
+-
+-void Display::displayHomeScreen(String ipLine, String orLine, String mdnsLine) {
+-    display->clearDisplay();
+-
+-    int16_t x1;
+-    int16_t y1;
+-    uint16_t width;
+-    uint16_t height;
+-
+-    display->getTextBounds(ipLine, 0, 0, &x1, &y1, &width, &height);
+-    display->setCursor((SCREEN_WIDTH - width) / 2, 10);
+-    display->println(ipLine);
+-
+-    display->getTextBounds(orLine, 0, 0, &x1, &y1, &width, &height);
+-    display->setCursor((SCREEN_WIDTH - width) / 2, 10 + SCREEN_HEIGHT / 3);
+-    display->println(orLine);
+-
+-    display->getTextBounds(mdnsLine, 0, 0, &x1, &y1, &width, &height);
+-    display->setCursor((SCREEN_WIDTH - width) / 2, 10 + SCREEN_HEIGHT / 3 * 2);
+-    display->println(mdnsLine);
+-
+-    display->display();
+-}
+\ No newline at end of file
+diff --git a/src/display.h b/src/display.h
+deleted file mode 100644
+index b431b8b..0000000
+--- a/src/display.h
++++ /dev/null
+@@ -1,13 +0,0 @@
+-#ifndef Display_h
+-#define Display_h
+-#include <Adafruit_SSD1306.h>
+-
+-class Display {
+-    private:
+-    Adafruit_SSD1306 *display;
+-    public:
+-    Display();
+-    void displayText(String text);
+-    void displayHomeScreen(String ipLine, String orLine, String mdnsLine);
+-};
+-#endif
+\ No newline at end of file
+diff --git a/src/main.cpp b/src/main.cpp
+index 9755886..c613e81 100644
+--- a/src/main.cpp
++++ b/src/main.cpp
+@@ -4,12 +4,10 @@
+ #include <ESPAsyncWebServer.h>
+ #include <FS.h>
+ #include <LittleFS.h>
+-#include <Wire.h>
+ #include <ESPmDNS.h>
+ #include "movement.h"
+ #include "runner.h"
+ #include "pen.h"
+-#include "display.h"
+ #include "phases/phasemanager.h"
+ 
+ AsyncWebServer server(80);
+@@ -17,7 +15,6 @@ AsyncWebServer server(80);
+ Movement *movement;
+ Runner *runner;
+ Pen *pen;
+-Display *display;
+ 
+ PhaseManager* phaseManager;
+ 
+@@ -45,11 +42,8 @@ void setup()
+         return;
+     }
+ 
+-    display = new Display();
+-    Serial.println("Initialized display");
+-
+     // initialize movement right away or the motors can start creeping due to floating output
+-    movement = new Movement(display);
++    movement = new Movement();
+     Serial.println("Initialized steppers");
+ 
+     bool resetAfterConnect = false;
+@@ -79,7 +73,7 @@ void setup()
+     pen = new Pen();
+     Serial.println("Initialized servo");
+ 
+-    runner = new Runner(movement, pen, display);
++    runner = new Runner(movement, pen);
+     Serial.println("Initialized runner");
+ 
+     server.serveStatic("/", LittleFS, "/www/").setDefaultFile("index.html").setCacheControl("no-cache");
+@@ -96,8 +90,8 @@ void setup()
+     server.on("/setServo", HTTP_POST, [](AsyncWebServerRequest *request)
+               { phaseManager->getCurrentPhase()->setServo(request); });
+ 
+-    server.on("/setPenDistance", HTTP_POST, [](AsyncWebServerRequest *request)
+-              { phaseManager->getCurrentPhase()->setPenDistance(request); });
++    server.on("/confirmPenCalibration", HTTP_POST, [](AsyncWebServerRequest *request)
++              { phaseManager->getCurrentPhase()->confirmPenCalibration(request); });
+ 
+     server.on("/estepsCalibration", HTTP_POST, [](AsyncWebServerRequest *request)
+               { phaseManager->getCurrentPhase()->estepsCalibration(request); });
+@@ -138,8 +132,7 @@ void setup()
+     server.begin();
+     Serial.println("Server started");
+ 
+-    display->displayHomeScreen("http://" + WiFi.localIP().toString(), "or", "http://mural.local");
+-    
++    Serial.println("Connect at http://" + WiFi.localIP().toString() + " or http://mural.local");
+ }
+ 
+ void loop()
+diff --git a/src/movement.cpp b/src/movement.cpp
+index 0469a5e..ac78990 100644
+--- a/src/movement.cpp
++++ b/src/movement.cpp
+@@ -1,11 +1,8 @@
+ #include "movement.h"
+-#include "display.h"
+ #include <stdexcept>
+ 
+-Movement::Movement(Display *display)
++Movement::Movement()
+ {
+-    this->display = display;
+-   
+     leftMotor = new AccelStepper(AccelStepper::DRIVER, LEFT_STEP_PIN, LEFT_DIR_PIN);
+     leftMotor->setEnablePin(LEFT_ENABLE_PIN);
+     leftMotor->setMaxSpeed(moveSpeedSteps);
+@@ -111,7 +108,7 @@ int Movement::extendToHome()
+ 
+     auto homeCoordinates = getHomeCoordinates();
+     startedHoming = true;
+-    auto moveTime = beginLinearTravel(homeCoordinates.x, homeCoordinates.y, moveSpeedSteps);
++    auto moveTime = beginLinearTravel(homeCoordinates.x, homeCoordinates.y, homeReturnSpeedMmPerSec);
+     return int(ceil(moveTime));
+ };
+ 
+@@ -332,8 +329,10 @@ Movement::Lengths Movement::getBeltLengths(const double x, const double y) {
+     return Lengths(leftLegSteps, rightLegSteps);
+ }
+ 
+-float Movement::beginLinearTravel(double x, double y, int speed)
++float Movement::beginLinearTravel(double x, double y, double speedMmPerSec)
+ {
++    auto prevX = X;
++    auto prevY = Y;
+     X = x;
+     Y = y;
+     if (topDistance == -1 || !homed) {
+@@ -353,6 +352,12 @@ float Movement::beginLinearTravel(double x, double y, int speed)
+         throw std::invalid_argument("Invalid y");
+     }
+ 
++    // Clamp defensively - see MAX_ALLOWED_SPEED_MM_PER_SEC's comment in movement.h.
++    // The lower bound avoids a division by ~0 below turning a slow-but-valid move into
++    // an effectively infinite moveTime.
++    constexpr double MIN_SPEED_MM_PER_SEC = 0.1;
++    speedMmPerSec = constrain(speedMmPerSec, MIN_SPEED_MM_PER_SEC, MAX_ALLOWED_SPEED_MM_PER_SEC);
++
+     auto lengths = getBeltLengths(x, y);
+     auto leftLegSteps = lengths.left;
+     auto rightLegSteps = lengths.right;
+@@ -360,20 +365,22 @@ float Movement::beginLinearTravel(double x, double y, int speed)
+     auto deltaLeft = int(abs(abs(leftMotor->currentPosition()) - leftLegSteps));
+     auto deltaRight = int(abs(abs(rightMotor->currentPosition()) - rightLegSteps));
+ 
+-    float leftSpeed, rightSpeed, moveTime;
+-    if (deltaLeft >= deltaRight)
+-    {
+-        leftSpeed = speed;
+-        moveTime = deltaLeft / leftSpeed;
+-        rightSpeed = deltaRight / moveTime;
+-    }
+-    else
+-    {
+-        rightSpeed = speed;
+-        moveTime = deltaRight / rightSpeed;
+-        leftSpeed = deltaLeft / moveTime;
++    // Actual straight-line pen-tip distance for this hop, in mm. Floored so a
++    // (near-)duplicate point can't turn into a division by ~0 below - if this happens,
++    // deltaLeft/deltaRight will also be ~0, so the resulting speeds don't matter much
++    // beyond staying finite.
++    constexpr double MIN_SEGMENT_DISTANCE_MM = 0.001;
++    double segmentDistanceMm = prevX >= 0 && prevY >= 0
++        ? distanceBetweenPoints(Point(prevX, prevY), Point(x, y))
++        : 0;
++    if (segmentDistanceMm < MIN_SEGMENT_DISTANCE_MM) {
++        segmentDistanceMm = MIN_SEGMENT_DISTANCE_MM;
+     }
+ 
++    float moveTime = segmentDistanceMm / speedMmPerSec;
++    float leftSpeed = deltaLeft / moveTime;
++    float rightSpeed = deltaRight / moveTime;
++
+     //Serial.printf("Begin movement: X(%s) Y(%s) UnsafeX(%s) UnsafeY(%s) leftLeg(%s) rightLeg(%s) deltaLeft(%s) deltaRight(%s) leftSpeed(%s) rightSpeed(%s) \n", String(x), String(y), String(unsafeX), String(unsafeY), String(leftLeg), String(rightLeg), String(deltaLeft), String(deltaRight), String(leftSpeed), String(rightSpeed));
+     leftMotor->moveTo(leftLegSteps);
+     leftMotor->setSpeed(leftSpeed);
+@@ -381,7 +388,6 @@ float Movement::beginLinearTravel(double x, double y, int speed)
+     rightMotor->moveTo(rightLegSteps);
+     rightMotor->setSpeed(rightSpeed);
+ 
+-    //display->displayText(String(X) + ", " + String(Y));
+     // delay(sleepDurationAfterMove_ms);
+ 
+     moving = true;
+diff --git a/src/movement.h b/src/movement.h
+index 01d9311..39b89cf 100644
+--- a/src/movement.h
++++ b/src/movement.h
+@@ -3,7 +3,6 @@
+ 
+ #include "AccelStepper.h"
+ #include "Arduino.h" 
+-#include "display.h"
+ 
+ // Motor driver parameters.
+ constexpr int printSpeedSteps = 500;
+@@ -16,6 +15,19 @@ constexpr int stepsPerRotation = 200 * 8; // 1/8 microstepping
+ // Effective diameter of the pulley+belts. Use EStep calibration to refine this value.
+ constexpr double diameter = 12.69;          // [mm]
+ const double circumference = diameter * PI; // [mm]
++
++// mm/s equivalents of the old steps/sec constants above, derived (not re-measured) so
++// callers that don't have a per-move planned speed - the end-of-job return-to-home move,
++// and the unused-but-kept-consistent MovementTask - behave the same as they did before
++// beginLinearTravel's speed parameter became mm/s instead of steps/sec.
++const double defaultSpeedMmPerSec = (double)printSpeedSteps / stepsPerRotation * circumference;    // ~12.5 mm/s
++const double homeReturnSpeedMmPerSec = (double)moveSpeedSteps / stepsPerRotation * circumference;  // ~37.4 mm/s
++
++// Safety clamp applied in beginLinearTravel regardless of what a move requests, in case of
++// a corrupt file or a future bug upstream - generous headroom above the planner's own
++// MAX_SPEED_MM_PER_SEC (tsc/src/velocityPlanner.ts) so it never limits normal operation.
++constexpr double MAX_ALLOWED_SPEED_MM_PER_SEC = 100.0;
++
+ constexpr double midPulleyToWall = 41.0;    // (Height) distance from mid of pulley to wall [mm].
+ constexpr float homedStepOffsetMM = 40.0;   // Length of fully retracted belt hitting stop screw.
+                                             // Measured from outer edge of screw to the point
+@@ -62,7 +74,6 @@ private:
+     bool startedHoming;
+     AccelStepper *leftMotor;
+     AccelStepper *rightMotor;
+-    Display *display;
+     void setOrigin();
+ 
+     struct Lengths {
+@@ -89,7 +100,7 @@ private:
+     double getDilationCorrectedBeltLength(double belt_length, double F_belt) const;
+     
+ public:
+-    Movement(Display *display);
++    Movement();
+     struct Point {
+         double x;
+         double y;
+@@ -116,7 +127,7 @@ public:
+     void rightStepper(const int dir);
+     int extendToHome();
+     void runSteppers();
+-    float beginLinearTravel(double x, double y, int speed);
++    float beginLinearTravel(double x, double y, double speedMmPerSec);
+ 
+     // Used for calibration of the esteps.
+     void extend1000mm(); 
+diff --git a/src/pen.cpp b/src/pen.cpp
+index d9a0fe1..7881799 100644
+--- a/src/pen.cpp
++++ b/src/pen.cpp
+@@ -39,7 +39,12 @@ void doSlowMove(Pen* pen, int startDegree, int targetDegree, int speedDegPerSec)
+         currentDegree = startDegree + progressDegrees;
+     }
+     pen->setRawValue(targetDegree);
+-    delay(200);
++
++    // Every real pen transition now covers exactly PEN_UP_DEGREES - PEN_DOWN_DEGREES
++    // (the down position is a fixed constant, not a per-session calibrated value - see
++    // pen.h), so there's one fixed settle time for a full swing rather than a per-move
++    // estimate based on distance.
++    delay(PEN_SETTLE_MS);
+ }
+ 
+ 
+@@ -47,8 +52,8 @@ Pen::Pen()
+ {
+     servo = new Servo();
+     servo->attach(2);
+-    servo->write(90);
+-    currentPosition = 90;
++    servo->write(PEN_UP_DEGREES);
++    currentPosition = PEN_UP_DEGREES;
+ }
+ 
+ void Pen::setRawValue(int rawValue) {
+@@ -56,29 +61,16 @@ void Pen::setRawValue(int rawValue) {
+     currentPosition = rawValue;
+ }
+ 
+-void Pen::setPenDistance(int value) {
+-    Serial.println("Pen distance angle set to " + String(value));
+-    this->penDistance = value;
+-}
+-
+ void Pen::slowUp() {
+-    if (penDistance == -1) {
+-        throw std::invalid_argument("not ready");
+-    }
+-
+-    doSlowMove(this, currentPosition, 90, slowSpeedDegPerSec);
+-    currentPosition = 90;
++    doSlowMove(this, currentPosition, PEN_UP_DEGREES, slowSpeedDegPerSec);
++    currentPosition = PEN_UP_DEGREES;
+ }
+ 
+ void Pen::slowDown() {
+-    if (penDistance == -1) {
+-        throw std::invalid_argument("not ready");
+-    }
+-
+-    doSlowMove(this, currentPosition, penDistance, slowSpeedDegPerSec);
+-    currentPosition = penDistance;
++    doSlowMove(this, currentPosition, PEN_DOWN_DEGREES, slowSpeedDegPerSec);
++    currentPosition = PEN_DOWN_DEGREES;
+ }
+ 
+ bool Pen::isDown() {
+-    return currentPosition == penDistance;
+-}
+\ No newline at end of file
++    return currentPosition == PEN_DOWN_DEGREES;
++}
+diff --git a/src/pen.h b/src/pen.h
+index 6018fc7..1f700f0 100644
+--- a/src/pen.h
++++ b/src/pen.h
+@@ -1,17 +1,44 @@
+ #ifndef Pen_h
+ #define Pen_h
++#include <Arduino.h>
+ #include <ESP32Servo.h>
+ const int RETRACT_DISTANCE = 20;
++
++// The "down" position is now a fixed constant rather than something the user
++// calibrates a servo angle for - see PenCalibrationPhase. The servo always moves to
++// exactly this angle, and the *pen itself* is adjusted in its holder (loosen, slide
++// until it just touches the writing surface, tighten) to match. This means every real
++// pen transition covers exactly the same, known distance, rather than a value that
++// varies per calibration session - see PEN_SETTLE_MS below.
++constexpr int PEN_UP_DEGREES = 90;
++constexpr int PEN_DOWN_DEGREES = 0; // full servo extension - gives the most room to
++                                     // mechanically adjust the pen's own position
++
++// Servo speed, from the datasheet: 60 degrees in 0.11 seconds, at rated voltage and no
++// load.
++const double SERVO_RATED_DEG_PER_SEC = 60.0 / 0.11; // ~545 deg/sec
++
++// Real-world load (the pen mechanism's own friction/spring, plus contact with the wall
++// during the down->up transition) will always be slower than the no-load datasheet
++// figure - this is a genuine guess at how much slower, not a measured value. If pen
++// timing still looks off, this is the first constant to try lowering.
++const double SERVO_LOAD_DERATING = 0.5;
++const double SERVO_EFFECTIVE_DEG_PER_SEC = SERVO_RATED_DEG_PER_SEC * SERVO_LOAD_DERATING;
++
++// Every pen up/down transition now covers exactly this many degrees (PEN_UP_DEGREES to
++// PEN_DOWN_DEGREES or back), since the down position is a fixed constant instead of a
++// per-session calibrated value. So rather than estimating a settle time per move, there's
++// one fixed settle time, computed once, for a full swing - see doSlowMove() in pen.cpp.
++const int PEN_SETTLE_MS = int(ceil((PEN_UP_DEGREES - PEN_DOWN_DEGREES) / SERVO_EFFECTIVE_DEG_PER_SEC * 1000));
++
+ class Pen {
+     private:
+     Servo *servo;
+-    int penDistance = -1;
+     int slowSpeedDegPerSec = 90;
+-    int currentPosition = 90;
++    int currentPosition = PEN_UP_DEGREES;
+     public:
+     Pen();
+     void setRawValue(int rawValue);
+-    void setPenDistance(int value);
+     void slowUp();
+     void slowDown();
+     bool isDown();
+diff --git a/src/phases/notsupportedphase.cpp b/src/phases/notsupportedphase.cpp
+index 2f62714..e753d87 100644
+--- a/src/phases/notsupportedphase.cpp
++++ b/src/phases/notsupportedphase.cpp
+@@ -19,7 +19,7 @@ void NotSupportedPhase::setServo(AsyncWebServerRequest *request) {
+     handleNotSupported(request);
+ }
+ 
+-void NotSupportedPhase::setPenDistance(AsyncWebServerRequest *request) {
++void NotSupportedPhase::confirmPenCalibration(AsyncWebServerRequest *request) {
+     handleNotSupported(request);
+ }
+ 
+diff --git a/src/phases/notsupportedphase.h b/src/phases/notsupportedphase.h
+index 2caa9bf..a4ea96f 100644
+--- a/src/phases/notsupportedphase.h
++++ b/src/phases/notsupportedphase.h
+@@ -10,7 +10,7 @@ class NotSupportedPhase : public Phase {
+     void setTopDistance(AsyncWebServerRequest *request);
+     void extendToHome(AsyncWebServerRequest *request);
+     void setServo(AsyncWebServerRequest *request);
+-    void setPenDistance(AsyncWebServerRequest *request);
++    void confirmPenCalibration(AsyncWebServerRequest *request);
+     void resumeTopDistance(AsyncWebServerRequest *request);
+     void run(AsyncWebServerRequest *request);
+     void doneWithPhase(AsyncWebServerRequest *request);
+diff --git a/src/phases/pencalibrationphase.cpp b/src/phases/pencalibrationphase.cpp
+index e02ea9a..47ee05e 100644
+--- a/src/phases/pencalibrationphase.cpp
++++ b/src/phases/pencalibrationphase.cpp
+@@ -12,10 +12,11 @@ void PenCalibrationPhase::setServo(AsyncWebServerRequest *request) {
+     request->send(200, "text/plain", "OK"); 
+ }
+ 
+-void PenCalibrationPhase::setPenDistance(AsyncWebServerRequest *request) {
+-    const AsyncWebParameter* p = request->getParam(0);
+-    int angle = p->value().toInt();
+-    pen->setPenDistance(angle);
++void PenCalibrationPhase::onEnter() {
++    pen->slowDown();
++}
++
++void PenCalibrationPhase::confirmPenCalibration(AsyncWebServerRequest *request) {
+     pen->slowUp();
+     manager->setPhase(PhaseManager::BeginDrawing);
+     manager->respondWithState(request);
+@@ -23,4 +24,4 @@ void PenCalibrationPhase::setPenDistance(AsyncWebServerRequest *request) {
+ 
+ const char* PenCalibrationPhase::getName() {
+     return "PenCalibration";
+-}
+\ No newline at end of file
++}
+diff --git a/src/phases/pencalibrationphase.h b/src/phases/pencalibrationphase.h
+index 804fd3e..de10c7c 100644
+--- a/src/phases/pencalibrationphase.h
++++ b/src/phases/pencalibrationphase.h
+@@ -11,8 +11,12 @@ class PenCalibrationPhase : public NotSupportedPhase {
+     public:
+     PenCalibrationPhase(PhaseManager* manager, Pen* pen);
+     void setServo(AsyncWebServerRequest *request);
+-    void setPenDistance(AsyncWebServerRequest *request);
++    void confirmPenCalibration(AsyncWebServerRequest *request);
+     const char* getName();
+-    
++    // Called by PhaseManager::setPhase() when (re-)entering this phase: moves the servo
++    // to its fixed "down" position immediately, so the person calibrating adjusts the
++    // pen's own mechanical position against a known, constant servo angle rather than
++    // the other way around - see pen.h.
++    void onEnter();
+ };
+-#endif
+\ No newline at end of file
++#endif
+diff --git a/src/phases/phase.h b/src/phases/phase.h
+index 0dfa4f2..b0e4f19 100644
+--- a/src/phases/phase.h
++++ b/src/phases/phase.h
+@@ -8,7 +8,7 @@ class Phase {
+     virtual void setTopDistance(AsyncWebServerRequest *request) = 0;
+     virtual void extendToHome(AsyncWebServerRequest *request) = 0;
+     virtual void setServo(AsyncWebServerRequest *request) = 0;
+-    virtual void setPenDistance(AsyncWebServerRequest *request) = 0;
++    virtual void confirmPenCalibration(AsyncWebServerRequest *request) = 0;
+     virtual void resumeTopDistance(AsyncWebServerRequest *request) = 0;
+     virtual void run(AsyncWebServerRequest *request) = 0;
+     virtual void doneWithPhase(AsyncWebServerRequest *request) = 0;
+diff --git a/src/phases/phasemanager.cpp b/src/phases/phasemanager.cpp
+index 7d90d34..f443708 100644
+--- a/src/phases/phasemanager.cpp
++++ b/src/phases/phasemanager.cpp
+@@ -43,6 +43,7 @@ void PhaseManager::setPhase(PhaseNames name) {
+         case PhaseNames::PenCalibration:
+             Serial.println("PenCalibration");
+             currentPhase = penCalibrationPhase;
++            penCalibrationPhase->onEnter();
+             break;
+         case PhaseNames::SvgSelect:
+             Serial.println("SvgSelect");
+diff --git a/src/phases/phasemanager.h b/src/phases/phasemanager.h
+index e148ee6..72b6b23 100644
+--- a/src/phases/phasemanager.h
++++ b/src/phases/phasemanager.h
+@@ -5,13 +5,14 @@
+ #include "pen.h"
+ #include "runner.h"
+ #include <ESPAsyncWebServer.h>
++class PenCalibrationPhase;
+ class PhaseManager {
+     private:
+     Phase* currentPhase;
+     Phase* retractBeltsPhase;
+     Phase* setTopDistancePhase;
+     Phase* extendToHomePhase;
+-    Phase* penCalibrationPhase;
++    PenCalibrationPhase* penCalibrationPhase;
+     Phase* svgSelectPhase;
+     Phase* beginDrawingPhase;
+     Movement* movement;
+diff --git a/src/runner.cpp b/src/runner.cpp
+index 94ef0ed..7268bc1 100644
+--- a/src/runner.cpp
++++ b/src/runner.cpp
+@@ -3,15 +3,13 @@
+ #include "tasks/interpolatingmovementtask.h"
+ #include "tasks/pentask.h"
+ #include "pen.h"
+-#include "display.h"
+ #include "LittleFS.h"
+ using namespace std;
+ 
+-Runner::Runner(Movement *movement, Pen *pen, Display *display) {
++Runner::Runner(Movement *movement, Pen *pen) {
+     stopped = true;
+     this->movement = movement;
+     this->pen = pen;
+-    this->display = display;
+ }
+ 
+ void Runner::initTaskProvider() {
+@@ -21,22 +19,25 @@ void Runner::initTaskProvider() {
+         throw std::invalid_argument("No File");
+     }
+ 
+-    auto line = openedFile.readStringUntil('\n');
+-    if (line.charAt(0) == 'd') {
+-        totalDistance = line.substring(1, line.length() - 1).toDouble();
+-    } else {
++    uint8_t version;
++    if (openedFile.read(&version, 1) != 1 || version != MURAL_FORMAT_VERSION) {
++        Serial.println("Bad file - bad version");
++        throw std::invalid_argument("bad file");
++    }
++
++    float distanceValue;
++    if (openedFile.read((uint8_t *)&distanceValue, 4) != 4) {
+         Serial.println("Bad file - no distance");
+         throw std::invalid_argument("bad file");
+     }
++    totalDistance = distanceValue;
+ 
+-    auto heightLine = openedFile.readStringUntil('\n');
+-    if (heightLine.charAt(0) == 'h') {
+-        auto height = heightLine.substring(1, heightLine.length() - 1).toDouble();
+-        // we actually dont need it, just validating
+-    } else {
++    float heightValue;
++    if (openedFile.read((uint8_t *)&heightValue, 4) != 4) {
+         Serial.println("Bad file - no height");
+         throw std::invalid_argument("bad file");
+     }
++    // we actually dont need it, just validating
+ 
+     Serial.println("Total distance to travel: " + String(totalDistance));
+ 
+@@ -59,26 +60,33 @@ Task *Runner::getNextTask()
+ {
+     if (openedFile.available())
+     {
+-        auto line = openedFile.readStringUntil('\n');
+-        if (line.charAt(0) == 'p')
++        uint8_t opcode;
++        openedFile.read(&opcode, 1);
++
++        if (opcode == MURAL_OPCODE_PEN_DOWN)
+         {
+-            if (line.charAt(1) == '1')
+-            {
+-                //Serial.println("Pen down");
+-                return new PenTask(false, pen);
+-            }
+-            else
+-            {
+-                //Serial.println("Pen up");
+-                return new PenTask(true, pen);
+-            }
++            //Serial.println("Pen down");
++            return new PenTask(false, pen);
++        }
++        else if (opcode == MURAL_OPCODE_PEN_UP)
++        {
++            //Serial.println("Pen up");
++            return new PenTask(true, pen);
++        }
++        else if (opcode == MURAL_OPCODE_MOVE)
++        {
++            int32_t xFixed, yFixed;
++            uint16_t speedFixed;
++            openedFile.read((uint8_t *)&xFixed, 4);
++            openedFile.read((uint8_t *)&yFixed, 4);
++            openedFile.read((uint8_t *)&speedFixed, 2);
++            targetPosition = Movement::Point(xFixed / MURAL_COORDINATE_SCALE, yFixed / MURAL_COORDINATE_SCALE);
++            return new InterpolatingMovementTask(movement, targetPosition, speedFixed / MURAL_SPEED_SCALE);
+         }
+         else
+         {
+-            auto x = line.substring(0, line.indexOf(" ")).toDouble();
+-            auto y = line.substring(line.indexOf(" ") + 1).toDouble();
+-            targetPosition = Movement::Point(x, y);
+-            return new InterpolatingMovementTask(movement, targetPosition);
++            Serial.println("Bad opcode in commands file: " + String(opcode));
++            throw std::invalid_argument("bad opcode");
+         }
+     }
+     else
+@@ -117,7 +125,6 @@ void Runner::run()
+             if (progress != newProgress) {
+                 Serial.println("Progress: " + String(newProgress));
+                 progress = newProgress;
+-                display->displayText(String(progress) + "%");
+             }
+ 
+         }
+diff --git a/src/runner.h b/src/runner.h
+index aa936e1..ee7c781 100644
+--- a/src/runner.h
++++ b/src/runner.h
+@@ -3,13 +3,27 @@
+ #include "movement.h"
+ #include "tasks/task.h"
+ #include "pen.h"
+-#include "display.h"
+ #include "LittleFS.h"
++
++// Binary job format - see tsc/src/binaryFormat.ts for the browser-side encoder.
++// Little-endian throughout, which matches the ESP32's native byte order.
++#define MURAL_FORMAT_VERSION 3
++#define MURAL_OPCODE_PEN_UP 0x00
++#define MURAL_OPCODE_PEN_DOWN 0x01
++#define MURAL_OPCODE_MOVE 0x02
++
++// Move coordinates are fixed-point int32: 1 unit = 1/MURAL_COORDINATE_SCALE mm.
++// Must match COORDINATE_SCALE in tsc/src/binaryFormat.ts exactly.
++#define MURAL_COORDINATE_SCALE 100.0
++
++// Move speed is fixed-point uint16: 1 unit = 1/MURAL_SPEED_SCALE mm/s.
++// Must match SPEED_SCALE in tsc/src/binaryFormat.ts exactly.
++#define MURAL_SPEED_SCALE 10.0
++
+ class Runner {
+     private:
+     Movement *movement;
+     Pen *pen;
+-    Display *display;
+     void initTaskProvider();
+     Task* getNextTask();
+     Task* currentTask;
+@@ -23,7 +37,7 @@ class Runner {
+     Task *finishingSequence[1];
+     int sequenceIx = 0;
+     public:
+-    Runner(Movement *movement, Pen *pen, Display *display);
++    Runner(Movement *movement, Pen *pen);
+     void start();
+     void run();
+     void dryRun();
+diff --git a/src/tasks/interpolatingmovementtask.cpp b/src/tasks/interpolatingmovementtask.cpp
+index ae3554a..9495c66 100644
+--- a/src/tasks/interpolatingmovementtask.cpp
++++ b/src/tasks/interpolatingmovementtask.cpp
+@@ -18,16 +18,17 @@ bool arePointsEqual(Movement::Point point1, Movement::Point point2) {
+     return point1.x == point2.x && point1.y == point2.y;
+ }
+ 
+-InterpolatingMovementTask::InterpolatingMovementTask(Movement *movement, Movement::Point target) {
++InterpolatingMovementTask::InterpolatingMovementTask(Movement *movement, Movement::Point target, double speedMmPerSec) {
+     this->target = target;
+     this->movement = movement;
++    this->speedMmPerSec = speedMmPerSec;
+ }
+ 
+ void InterpolatingMovementTask::startRunning() {
+-    Serial.printf("Starting the move to %.1f, %.1f\n", target.x, target.y);
++    Serial.printf("Starting the move to %.1f, %.1f at %.1fmm/s\n", target.x, target.y, speedMmPerSec);
+     auto currentCoordinates = movement->getCoordinates();
+     auto incrementPoint = getNextIncrement(currentCoordinates, target);
+-    movement->beginLinearTravel(incrementPoint.x, incrementPoint.y, printSpeedSteps);
++    movement->beginLinearTravel(incrementPoint.x, incrementPoint.y, speedMmPerSec);
+ }
+ 
+ bool InterpolatingMovementTask::isDone() {
+@@ -41,7 +42,7 @@ bool InterpolatingMovementTask::isDone() {
+     }
+ 
+     auto incrementPoint = getNextIncrement(movement->getCoordinates(), target);
+-    movement->beginLinearTravel(incrementPoint.x, incrementPoint.y, printSpeedSteps);
++    movement->beginLinearTravel(incrementPoint.x, incrementPoint.y, speedMmPerSec);
+     
+     return false;
+ }
+diff --git a/src/tasks/interpolatingmovementtask.h b/src/tasks/interpolatingmovementtask.h
+index 3698c34..fde2ad4 100644
+--- a/src/tasks/interpolatingmovementtask.h
++++ b/src/tasks/interpolatingmovementtask.h
+@@ -8,9 +8,12 @@ class InterpolatingMovementTask : public Task {
+     Movement *movement;
+     Movement::Point target;
+     Movement::Point position;
++    double speedMmPerSec;
+     public:
+     const static char* NAME;
+-    InterpolatingMovementTask(Movement *movement, Movement::Point target);
++    // speedMmPerSec defaults to defaultSpeedMmPerSec (movement.h) for callers that aren't
++    // driven by a planned speed from the job file, e.g. the end-of-job return-to-home move.
++    InterpolatingMovementTask(Movement *movement, Movement::Point target, double speedMmPerSec = defaultSpeedMmPerSec);
+     bool isDone();
+     void startRunning();
+     const char* name() {
+diff --git a/src/tasks/movementtask.cpp b/src/tasks/movementtask.cpp
+index 3c8863f..5d61014 100644
+--- a/src/tasks/movementtask.cpp
++++ b/src/tasks/movementtask.cpp
+@@ -6,7 +6,7 @@ MovementTask::MovementTask(int x, int y, Movement *movement) {
+ }
+ 
+ void MovementTask::startRunning() {
+-    movement->beginLinearTravel(x, y, printSpeedSteps);
++    movement->beginLinearTravel(x, y, defaultSpeedMmPerSec);
+ }
+ 
+ bool MovementTask::isDone() {
+diff --git a/tsc/src/binaryFormat.ts b/tsc/src/binaryFormat.ts
+new file mode 100644
+index 0000000..41d1d69
+--- /dev/null
++++ b/tsc/src/binaryFormat.ts
+@@ -0,0 +1,112 @@
++import { Command } from './types';
++import { MAX_SPEED_MM_PER_SEC } from './velocityPlanner';
++
++// Binary job format (little-endian throughout; matches ESP32 native byte order,
++// so the firmware can read fields directly with no byte-swapping):
++//
++// Header (9 bytes):
++//   offset 0: uint8   formatVersion   (currently 3)
++//   offset 1: float32 totalDistance   (mm)
++//   offset 5: float32 height          (mm, drawing height, informational only)
++//
++// Records (repeated until EOF):
++//   opcode 0x00: pen up                                          -> 1 byte total
++//   opcode 0x01: pen down                                         -> 1 byte total
++//   opcode 0x02: move, followed by int32 x, int32 y, uint16 speed -> 11 bytes total
++//              (x, y fixed-point per COORDINATE_SCALE; speed fixed-point per SPEED_SCALE)
++//
++// Coordinates are fixed-point rather than float32: exact decimal values with no
++// IEEE-754 rounding, at the cost of a fixed maximum resolution (see COORDINATE_SCALE).
++//
++// Format version bumped 2 -> 3 to add the per-move speed field (velocityPlanner.ts) -
++// old firmware will reject files in this format (and vice versa) via the version byte
++// check in initTaskProvider().
++
++export const FORMAT_VERSION = 3;
++
++export const OPCODE_PEN_UP = 0x00;
++export const OPCODE_PEN_DOWN = 0x01;
++export const OPCODE_MOVE = 0x02;
++
++// Fixed-point scale for move coordinates: 1 unit = 1/COORDINATE_SCALE mm.
++// At 100, that's 0.01mm resolution with a range of ±21,474,836mm (int32) -
++// vastly more than a wall plotter needs in either precision or range, and it
++// still leaves headroom versus float32's ~0.0003mm precision at these magnitudes.
++export const COORDINATE_SCALE = 100;
++
++// Fixed-point scale for the per-move speed field: 1 unit = 1/SPEED_SCALE mm/s.
++// At 10, that's 0.1mm/s resolution with a uint16 range of 0-6553.5mm/s - far beyond
++// MAX_SPEED_MM_PER_SEC, so there's no risk of overflow from any value the planner
++// can actually produce.
++export const SPEED_SCALE = 10;
++
++const HEADER_SIZE = 9;
++const PEN_RECORD_SIZE = 1;
++const MOVE_RECORD_SIZE = 11;
++
++function toFixedPoint(mm: number): number {
++    return Math.round(mm * COORDINATE_SCALE);
++}
++
++function speedToFixedPoint(speedMmPerSec: number): number {
++    const clamped = Math.max(0, Math.min(speedMmPerSec, MAX_SPEED_MM_PER_SEC));
++    return Math.round(clamped * SPEED_SCALE);
++}
++
++// `commands` is expected to be the output of velocityPlanner.ts's planVelocities(),
++// applied to the deduped command list produced in toCommands.ts. Any 'd...'/'h...'
++// marker strings in it are ignored here since totalDistance and height are passed in
++// explicitly and written into the binary header instead.
++export function encodeCommandsBinary(commands: Command[], totalDistance: number, height: number): ArrayBuffer {
++    let size = HEADER_SIZE;
++    for (const cmd of commands) {
++        if (typeof cmd === 'string') {
++            if (cmd === 'p0' || cmd === 'p1') {
++                size += PEN_RECORD_SIZE;
++            }
++            // any other string command (d.../h...) is a header marker, not a record - skip
++        } else {
++            size += MOVE_RECORD_SIZE;
++        }
++    }
++
++    const buffer = new ArrayBuffer(size);
++    const view = new DataView(buffer);
++    let offset = 0;
++
++    view.setUint8(offset, FORMAT_VERSION);
++    offset += 1;
++
++    view.setFloat32(offset, totalDistance, true);
++    offset += 4;
++
++    view.setFloat32(offset, height, true);
++    offset += 4;
++
++    for (const cmd of commands) {
++        if (typeof cmd === 'string') {
++            if (cmd === 'p0') {
++                view.setUint8(offset, OPCODE_PEN_UP);
++                offset += 1;
++            } else if (cmd === 'p1') {
++                view.setUint8(offset, OPCODE_PEN_DOWN);
++                offset += 1;
++            }
++        } else {
++            view.setUint8(offset, OPCODE_MOVE);
++            offset += 1;
++            view.setInt32(offset, toFixedPoint(cmd.x), true);
++            offset += 4;
++            view.setInt32(offset, toFixedPoint(cmd.y), true);
++            offset += 4;
++            // cmd.speed is optional on the type (see types.ts) for callers that never run
++            // it through the planner; fall back to max speed rather than silently emitting 0
++            // and stalling the job.
++            view.setUint16(offset, speedToFixedPoint(cmd.speed ?? MAX_SPEED_MM_PER_SEC), true);
++            offset += 2;
++        }
++    }
++
++    return buffer;
++}
++
+diff --git a/tsc/src/main.ts b/tsc/src/main.ts
+index 874192f..e685690 100644
+--- a/tsc/src/main.ts
++++ b/tsc/src/main.ts
+@@ -41,6 +41,7 @@ async function render(request: RequestTypes.RenderSVGRequest) {
+         type: "renderer",
+         payload: {
+             commands: renderResult.commands,
++            binary: renderResult.binary,
+             svgJson: resultSvgJson,
+             distance: renderResult.distance,
+             drawDistance: renderResult.drawDistance,
+diff --git a/tsc/src/orOpt.ts b/tsc/src/orOpt.ts
+new file mode 100644
+index 0000000..97cbf0f
+--- /dev/null
++++ b/tsc/src/orOpt.ts
+@@ -0,0 +1,107 @@
++import { loadPaper } from './paperLoader';
++import { updateStatusFn } from './types';
++
++const paper = loadPaper();
++
++// Or-opt: a local-search pass that runs after optimizer.ts's greedy nearest-neighbor
++// ordering. It repeatedly tries relocating short chains of 1-3 consecutive paths to a
++// different position in the draw order, keeping the move only if it shortens total
++// pen-up travel distance. Unlike 2-opt, it never reverses a path's own drawn direction -
++// only the *order* paths are visited in - so it can't change what ends up on the wall,
++// only how long it takes to get there.
++//
++// Greedy nearest-neighbor construction is typically within ~25% of optimal travel
++// distance; Or-opt on top of it typically closes a good chunk of that gap for
++// comparatively little compute, since each candidate move is O(1) to evaluate (only the
++// edges touching the moved chain change) rather than the O(chain length) cost a
++// direction-preserving block-reversal (2-opt) move would need here.
++
++const MAX_CHAIN_LENGTH = 3;
++const MAX_PASSES = 15;
++const MAX_MILLISECONDS = 4000; // safety budget - bail out with whatever improvement was found so far
++const EPSILON = 1e-6;
++
++function pathStart(p: paper.Path): paper.Point {
++    return p.firstSegment.point;
++}
++
++function pathEnd(p: paper.Path): paper.Point {
++    return p.lastSegment.point;
++}
++
++export function orOptimizePaths(paths: paper.Path[], startX: number, startY: number, updateStatusFn: updateStatusFn): paper.Path[] {
++    if (paths.length < 4) {
++        return paths; // not enough paths for a relocation to ever help
++    }
++
++    updateStatusFn("Reducing travel distance");
++
++    let tour = [...paths];
++    const startPoint = new paper.Point(startX, startY);
++    const deadline = Date.now() + MAX_MILLISECONDS;
++
++    function pointBefore(t: paper.Path[], index: number): paper.Point {
++        return index === 0 ? startPoint : pathEnd(t[index - 1]);
++    }
++
++    let improved = true;
++    let pass = 0;
++
++    while (improved && pass < MAX_PASSES && Date.now() < deadline) {
++        improved = false;
++        pass++;
++
++        for (let chainLength = 1; chainLength <= MAX_CHAIN_LENGTH; chainLength++) {
++            for (let i = 0; i + chainLength <= tour.length; i++) {
++                if (Date.now() >= deadline) {
++                    break;
++                }
++
++                const chain = tour.slice(i, i + chainLength);
++                const chainStart = pathStart(chain[0]);
++                const chainEnd = pathEnd(chain[chainLength - 1]);
++
++                const beforeChain = pointBefore(tour, i);
++                const afterIndex = i + chainLength;
++                const afterChain = afterIndex < tour.length ? pathStart(tour[afterIndex]) : null;
++
++                // How much total distance shrinks by lifting this chain out and closing the gap.
++                const removedCost = beforeChain.getDistance(chainStart) + (afterChain ? chainEnd.getDistance(afterChain) : 0);
++                const bridgeCost = afterChain ? beforeChain.getDistance(afterChain) : 0;
++                const removalGain = removedCost - bridgeCost;
++
++                if (removalGain <= EPSILON) {
++                    continue; // even a free re-insertion wouldn't beat leaving it in place
++                }
++
++                const remainingTour = tour.slice(0, i).concat(tour.slice(i + chainLength));
++
++                let bestInsertionIndex = -1;
++                let bestDelta = -EPSILON; // only accept strict improvements
++
++                for (let k = 0; k <= remainingTour.length; k++) {
++                    const before = pointBefore(remainingTour, k);
++                    const after = k < remainingTour.length ? pathStart(remainingTour[k]) : null;
++
++                    const oldBridge = after ? before.getDistance(after) : 0;
++                    const insertionCost = before.getDistance(chainStart) + (after ? chainEnd.getDistance(after) : 0) - oldBridge;
++
++                    const delta = insertionCost - removalGain;
++                    if (delta < bestDelta) {
++                        bestDelta = delta;
++                        bestInsertionIndex = k;
++                    }
++                }
++
++                if (bestInsertionIndex >= 0) {
++                    tour = remainingTour.slice(0, bestInsertionIndex)
++                        .concat(chain)
++                        .concat(remainingTour.slice(bestInsertionIndex));
++                    improved = true;
++                }
++            }
++        }
++    }
++
++    return tour;
++}
+diff --git a/tsc/src/toCommands.ts b/tsc/src/toCommands.ts
+index 2be7fed..48479f1 100644
+--- a/tsc/src/toCommands.ts
++++ b/tsc/src/toCommands.ts
+@@ -2,12 +2,15 @@ import { Command, RequestTypes, updateStatusFn } from './types';
+ import { generatePaths } from './generator';
+ import { generateInfills } from './infill';
+ import { optimizePaths } from './optimizer';
++import { orOptimizePaths } from './orOpt';
+ import { renderPathsToCommands } from './renderer';
+ import { trimCommands } from './trimmer';
+ import { dedupeCommands } from './deduplicator';
+ import { measureDistance } from './measurer';
+ import { loadPaper } from './paperLoader';
+ import { flattenPaths } from './flattener';
++import { encodeCommandsBinary } from './binaryFormat';
++import { planVelocities } from './velocityPlanner';
+ 
+ const paper = loadPaper();
+ 
+@@ -41,9 +44,10 @@ export async function renderSvgJsonToCommands(
+ 
+     updateStatusFn("Optimizing paths");
+     const optimizedPaths = optimizePaths(pathsWithInfills, request.homeX, request.homeY);
++    const orOptimizedPaths = orOptimizePaths(optimizedPaths, request.homeX, request.homeY, updateStatusFn);
+ 
+     updateStatusFn("Generating commands");
+-    const commands = renderPathsToCommands(optimizedPaths, request.width, request.height);
++    const commands = renderPathsToCommands(orOptimizedPaths, request.width, request.height);
+     commands.push('p0');
+ 
+     const trimmedCommands = trimCommands(commands);
+@@ -52,15 +56,25 @@ export async function renderSvgJsonToCommands(
+ 
+     const dedupedCommands = dedupeCommands(trimmedCommands);
+ 
++    updateStatusFn("Planning velocity");
++    const speedPlannedCommands = planVelocities(dedupedCommands);
++
+     updateStatusFn("Measuring total distance");
+-    dedupedCommands.unshift(`h${request.height}`);
+-    const distances = measureDistance(dedupedCommands);
++    speedPlannedCommands.unshift(`h${request.height}`);
++    const distances = measureDistance(speedPlannedCommands);
+     const totalDistance = +distances.totalDistance.toFixed(1);
+-    dedupedCommands.unshift(`d${totalDistance}`);
++    speedPlannedCommands.unshift(`d${totalDistance}`);
++
++    const commandStrings = speedPlannedCommands.map(stringifyCommand);
++
++    // commandStrings/commands (below) is kept around purely so the browser can render
++    // the on-screen preview via renderCommandsToSvgJson - it's never uploaded anymore.
++    updateStatusFn("Encoding binary job");
++    const binary = encodeCommandsBinary(speedPlannedCommands, totalDistance, request.height);
+ 
+-    const commandStrings = dedupedCommands.map(stringifyCommand);
+     return {
+         commands: commandStrings,
++        binary,
+         distance: totalDistance,
+         drawDistance: +distances.drawDistance.toFixed(1),
+     };
+diff --git a/tsc/src/types.ts b/tsc/src/types.ts
+index 3903134..d4069f6 100644
+--- a/tsc/src/types.ts
++++ b/tsc/src/types.ts
+@@ -4,6 +4,8 @@ export type updateStatusFn = (status: string) => void;
+ export type CoordinateCommand = {
+     x: number;
+     y: number;
++    speed?: number; // mm/s - populated by velocityPlanner.ts, optional so existing
++                     // construction sites (renderer.ts) don't need to change
+ }
+ 
+ export type PenUpCommand = 'p0';
+diff --git a/tsc/src/velocityPlanner.ts b/tsc/src/velocityPlanner.ts
+new file mode 100644
+index 0000000..fd0b7ec
+--- /dev/null
++++ b/tsc/src/velocityPlanner.ts
+@@ -0,0 +1,140 @@
++import { Command, CoordinateCommand } from './types';
++
++// Computes a per-point target pen speed (mm/s) across the WHOLE job, treating every
++// coordinate command (pen up travel moves included, not just pen-down strokes) as one
++// continuous polyline. This never reorders, adds, or removes points, and never changes
++// any point's (x, y) - it only annotates a `speed` value onto each CoordinateCommand.
++//
++// Units are physical (mm/s, mm/s^2) rather than steps/sec, matching how positions are
++// already sent in mm - the firmware's step/mm calibration constants stay entirely
++// firmware-side, exactly as they do for position today.
++//
++// IMPORTANT, and easy to get wrong (I got it wrong on the first pass of this): this does
++// NOT need to force speed to 0 at every pen up/down transition. Tracing AccelStepper's
++// actual runSpeed()/setSpeed() implementation shows there is no persisted momentum
++// between separate move commands - every discrete move already ends in a genuine full
++// stop before the next one begins, regardless of what speed either one used, because
++// there's a real tick where distanceToGo() hits 0 and no further steps are issued until
++// the next moveTo()/setSpeed() call. So pen transitions are already "at rest" today, for
++// free, by construction - what this planner actually changes is the SPEED (and therefore
++// the mechanical shock) at which those unavoidable stops happen: low near sharp corners
++// and near the true start/end of the whole job, higher through long straight runs -
++// rather than every single move using the same fixed speed regardless of what's around
++// it. Only the very first and very last point of the entire job need to be pinned to a
++// true standing start/stop; treating every other point (including ones adjacent to a
++// pen up/down marker) as just another point on the polyline is both simpler and correct.
++
++// Starting points, not verified values - see MURAL_FORK_README.md. MAX_SPEED_MM_PER_SEC
++// is set close to the ~12.5mm/s the firmware's old hardcoded printSpeedSteps constant
++// already implied (500 steps/sec at the existing pulley circumference/microstepping),
++// so cruise speed on straight runs stays roughly comparable to current behavior.
++// MAX_ACCEL_MM_PER_SEC2 has no existing equivalent to anchor to - today's firmware
++// effectively uses a new, independent constant-speed command for every ~1mm segment
++// with no ramp at all - so this is a genuine guess pending real-hardware tuning.
++export const MAX_SPEED_MM_PER_SEC = 15;
++export const MAX_ACCEL_MM_PER_SEC2 = 100;
++
++// Cornering speed limit: at each interior point of the polyline, the allowed speed is
++// scaled by a factor in [0, 1] based on the angle between the incoming and outgoing
++// direction - 1.0 for continuing straight, 0.0 for a full reversal. CORNER_FACTOR_POWER
++// controls how sharply that factor falls off approaching a tight corner (higher = more
++// tolerant of gentle bends, more aggressive slowdown for sharp ones).
++const CORNER_FACTOR_POWER = 2;
++const MIN_SEGMENT_DISTANCE = 1e-6; // guards against divide-by-zero on duplicate points
++
++interface Point {
++    x: number;
++    y: number;
++}
++
++function distance(a: Point, b: Point): number {
++    return Math.hypot(b.x - a.x, b.y - a.y);
++}
++
++function isCoordinateCommand(cmd: Command): cmd is CoordinateCommand {
++    return typeof cmd !== 'string';
++}
++
++// Speed achievable after accelerating from `fromSpeed` over `dist` at MAX_ACCEL_MM_PER_SEC2.
++function speedAfterAccelerating(fromSpeed: number, dist: number): number {
++    return Math.sqrt(fromSpeed * fromSpeed + 2 * MAX_ACCEL_MM_PER_SEC2 * dist);
++}
++
++function cornerSpeedFactor(prev: Point, current: Point, next: Point): number {
++    const d1x = current.x - prev.x, d1y = current.y - prev.y;
++    const d2x = next.x - current.x, d2y = next.y - current.y;
++    const len1 = Math.hypot(d1x, d1y), len2 = Math.hypot(d2x, d2y);
++    if (len1 < MIN_SEGMENT_DISTANCE || len2 < MIN_SEGMENT_DISTANCE) {
++        return 1; // degenerate segment - don't let it force an artificial slowdown
++    }
++    const cosTheta = (d1x * d2x + d1y * d2y) / (len1 * len2); // -1 (reversal) .. 1 (straight)
++    const factor = Math.max(0, Math.min(1, (cosTheta + 1) / 2));
++    return Math.pow(factor, CORNER_FACTOR_POWER);
++}
++
++// speeds[i] is the target constant speed for the move that ARRIVES at points[i]; speeds[0]
++// is a placeholder (nothing moves "to" the very first point of the job - it's wherever the
++// bot already is when planning starts).
++function planSpeedsForPolyline(points: Point[]): number[] {
++    const n = points.length;
++    if (n === 0) {
++        return [];
++    }
++    if (n === 1) {
++        return [0];
++    }
++
++    const segmentDistances: number[] = [];
++    for (let i = 0; i < n - 1; i++) {
++        segmentDistances.push(Math.max(distance(points[i], points[i + 1]), MIN_SEGMENT_DISTANCE));
++    }
++
++    const cornerLimits: number[] = new Array(n).fill(MAX_SPEED_MM_PER_SEC);
++    for (let i = 1; i < n - 1; i++) {
++        cornerLimits[i] = MAX_SPEED_MM_PER_SEC * cornerSpeedFactor(points[i - 1], points[i], points[i + 1]);
++    }
++
++    // Forward pass: accelerate as fast as possible from a standing start at the very
++    // first point, capped by cruise speed and each point's cornering limit.
++    const forward: number[] = new Array(n);
++    forward[0] = 0;
++    for (let i = 1; i < n; i++) {
++        const reachable = speedAfterAccelerating(forward[i - 1], segmentDistances[i - 1]);
++        forward[i] = Math.min(reachable, MAX_SPEED_MM_PER_SEC, cornerLimits[i]);
++    }
++
++    // Backward pass: cap every point so decelerating to a standing stop at the very last
++    // point is physically achievable, without exceeding what the forward pass allows.
++    const speeds: number[] = new Array(n);
++    speeds[n - 1] = 0;
++    for (let i = n - 2; i >= 0; i--) {
++        const reachable = speedAfterAccelerating(speeds[i + 1], segmentDistances[i]);
++        speeds[i] = Math.min(forward[i], reachable);
++    }
++
++    return speeds;
++}
++
++export function planVelocities(commands: Command[]): Command[] {
++    const coordIndices: number[] = [];
++    for (let i = 0; i < commands.length; i++) {
++        if (isCoordinateCommand(commands[i])) {
++            coordIndices.push(i);
++        }
++    }
++
++    if (coordIndices.length === 0) {
++        return commands;
++    }
++
++    const points = coordIndices.map(i => commands[i] as CoordinateCommand);
++    const speeds = planSpeedsForPolyline(points);
++
++    const result = [...commands];
++    for (let k = 0; k < coordIndices.length; k++) {
++        const original = points[k];
++        result[coordIndices[k]] = { x: original.x, y: original.y, speed: speeds[k] };
++    }
++    return result;
++}
++

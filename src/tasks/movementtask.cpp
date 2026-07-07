@@ -6,7 +6,7 @@ MovementTask::MovementTask(int x, int y, Movement *movement) {
 }
 
 void MovementTask::startRunning() {
-    movement->beginLinearTravel(x, y, printSpeedSteps);
+    movement->beginLinearTravel(x, y, defaultSpeedMmPerSec);
 }
 
 bool MovementTask::isDone() {

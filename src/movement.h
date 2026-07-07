@@ -3,7 +3,6 @@
 
 #include "AccelStepper.h"
 #include "Arduino.h" 
-#include "display.h"
 
 // Motor driver parameters.
 constexpr int printSpeedSteps = 500;
@@ -16,6 +15,19 @@ constexpr int stepsPerRotation = 200 * 8; // 1/8 microstepping
 // Effective diameter of the pulley+belts. Use EStep calibration to refine this value.
 constexpr double diameter = 12.69;          // [mm]
 const double circumference = diameter * PI; // [mm]
+
+// mm/s equivalents of the old steps/sec constants above, derived (not re-measured) so
+// callers that don't have a per-move planned speed - the end-of-job return-to-home move,
+// and the unused-but-kept-consistent MovementTask - behave the same as they did before
+// beginLinearTravel's speed parameter became mm/s instead of steps/sec.
+const double defaultSpeedMmPerSec = (double)printSpeedSteps / stepsPerRotation * circumference;    // ~12.5 mm/s
+const double homeReturnSpeedMmPerSec = (double)moveSpeedSteps / stepsPerRotation * circumference;  // ~37.4 mm/s
+
+// Safety clamp applied in beginLinearTravel regardless of what a move requests, in case of
+// a corrupt file or a future bug upstream - generous headroom above the planner's own
+// MAX_SPEED_MM_PER_SEC (tsc/src/velocityPlanner.ts) so it never limits normal operation.
+constexpr double MAX_ALLOWED_SPEED_MM_PER_SEC = 100.0;
+
 constexpr double midPulleyToWall = 41.0;    // (Height) distance from mid of pulley to wall [mm].
 constexpr float homedStepOffsetMM = 40.0;   // Length of fully retracted belt hitting stop screw.
                                             // Measured from outer edge of screw to the point
@@ -62,7 +74,6 @@ private:
     bool startedHoming;
     AccelStepper *leftMotor;
     AccelStepper *rightMotor;
-    Display *display;
     void setOrigin();
 
     struct Lengths {
@@ -89,7 +100,7 @@ private:
     double getDilationCorrectedBeltLength(double belt_length, double F_belt) const;
     
 public:
-    Movement(Display *display);
+    Movement();
     struct Point {
         double x;
         double y;
@@ -116,7 +127,7 @@ public:
     void rightStepper(const int dir);
     int extendToHome();
     void runSteppers();
-    float beginLinearTravel(double x, double y, int speed);
+    float beginLinearTravel(double x, double y, double speedMmPerSec);
 
     // Used for calibration of the esteps.
     void extend1000mm(); 

@@ -105,17 +105,8 @@
       </div>
       <div id="penCalibrationSlide" class="muralSlide" style="display:none;">
         <h3 class="mb-2 fw-normal">Pen calibration</h3>
-        <h6 class="mb-5"><small class="text-muted">Insert the pen so it's close to, but not touching the wall and secure it with a bolt. Then, adjust the pen position so the pen is touching the wall</small></h6>
-        <input type="range" class="form-range mb-5 text-center" min="0" max="90" id="servoRange" value="0">
-        <div class="btn-group mb-3 btn-group-lg" role="group">
-          <div class="btn-group me-3" role="group">
-            <button type="button" class="btn btn-primary fs-4" id="penMinus">-</button>
-          </div>
-          <div class="btn-group me-3" role="group">
-            <button type="button" class="btn btn-primary fs-4" id="penPlus">+</button>
-          </div>
-        </div>
-        <button class="w-100 btn btn-lg btn-primary mb-5" id="setPenDistance">Pen is touching the wall</button>
+        <h6 class="mb-5"><small class="text-muted">The pen has moved to its writing position. Loosen the pen holder's bolt and slide the pen down until it's just touching the wall, then tighten the bolt again</small></h6>
+        <button class="w-100 btn btn-lg btn-primary mb-5" id="confirmPenCalibration">Pen is touching the wall</button>
       </div>
       <div id="svgUploadSlide" class="muralSlide" style="display:none;">
         <h3 class="mb-2 fw-normal">Select SVG Image</h3>

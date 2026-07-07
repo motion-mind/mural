@@ -10,7 +10,7 @@ class NotSupportedPhase : public Phase {
     void setTopDistance(AsyncWebServerRequest *request);
     void extendToHome(AsyncWebServerRequest *request);
     void setServo(AsyncWebServerRequest *request);
-    void setPenDistance(AsyncWebServerRequest *request);
+    void confirmPenCalibration(AsyncWebServerRequest *request);
     void resumeTopDistance(AsyncWebServerRequest *request);
     void run(AsyncWebServerRequest *request);
     void doneWithPhase(AsyncWebServerRequest *request);

@@ -19,7 +19,7 @@ void NotSupportedPhase::setServo(AsyncWebServerRequest *request) {
     handleNotSupported(request);
 }
 
-void NotSupportedPhase::setPenDistance(AsyncWebServerRequest *request) {
+void NotSupportedPhase::confirmPenCalibration(AsyncWebServerRequest *request) {
     handleNotSupported(request);
 }
 

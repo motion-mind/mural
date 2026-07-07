@@ -8,7 +8,7 @@ class Phase {
     virtual void setTopDistance(AsyncWebServerRequest *request) = 0;
     virtual void extendToHome(AsyncWebServerRequest *request) = 0;
     virtual void setServo(AsyncWebServerRequest *request) = 0;
-    virtual void setPenDistance(AsyncWebServerRequest *request) = 0;
+    virtual void confirmPenCalibration(AsyncWebServerRequest *request) = 0;
     virtual void resumeTopDistance(AsyncWebServerRequest *request) = 0;
     virtual void run(AsyncWebServerRequest *request) = 0;
     virtual void doneWithPhase(AsyncWebServerRequest *request) = 0;

@@ -3,15 +3,13 @@
 #include "tasks/interpolatingmovementtask.h"
 #include "tasks/pentask.h"
 #include "pen.h"
-#include "display.h"
 #include "LittleFS.h"
 using namespace std;
 
-Runner::Runner(Movement *movement, Pen *pen, Display *display) {
+Runner::Runner(Movement *movement, Pen *pen) {
     stopped = true;
     this->movement = movement;
     this->pen = pen;
-    this->display = display;
 }
 
 void Runner::initTaskProvider() {
@@ -21,22 +19,25 @@ void Runner::initTaskProvider() {
         throw std::invalid_argument("No File");
     }
 
-    auto line = openedFile.readStringUntil('\n');
-    if (line.charAt(0) == 'd') {
-        totalDistance = line.substring(1, line.length() - 1).toDouble();
-    } else {
-        Serial.println("Bad file - no distance");
+    uint8_t version;
+    if (openedFile.read(&version, 1) != 1 || version != MURAL_FORMAT_VERSION) {
+        Serial.println("Bad file - bad version");
         throw std::invalid_argument("bad file");
     }
 
-    auto heightLine = openedFile.readStringUntil('\n');
-    if (heightLine.charAt(0) == 'h') {
-        auto height = heightLine.substring(1, heightLine.length() - 1).toDouble();
-        // we actually dont need it, just validating
-    } else {
+    float distanceValue;
+    if (openedFile.read((uint8_t *)&distanceValue, 4) != 4) {
+        Serial.println("Bad file - no distance");
+        throw std::invalid_argument("bad file");
+    }
+    totalDistance = distanceValue;
+
+    float heightValue;
+    if (openedFile.read((uint8_t *)&heightValue, 4) != 4) {
         Serial.println("Bad file - no height");
         throw std::invalid_argument("bad file");
     }
+    // we actually dont need it, just validating
 
     Serial.println("Total distance to travel: " + String(totalDistance));
 
@@ -59,26 +60,33 @@ Task *Runner::getNextTask()
 {
     if (openedFile.available())
     {
-        auto line = openedFile.readStringUntil('\n');
-        if (line.charAt(0) == 'p')
+        uint8_t opcode;
+        openedFile.read(&opcode, 1);
+
+        if (opcode == MURAL_OPCODE_PEN_DOWN)
         {
-            if (line.charAt(1) == '1')
-            {
-                //Serial.println("Pen down");
-                return new PenTask(false, pen);
-            }
-            else
-            {
-                //Serial.println("Pen up");
-                return new PenTask(true, pen);
-            }
+            //Serial.println("Pen down");
+            return new PenTask(false, pen);
+        }
+        else if (opcode == MURAL_OPCODE_PEN_UP)
+        {
+            //Serial.println("Pen up");
+            return new PenTask(true, pen);
+        }
+        else if (opcode == MURAL_OPCODE_MOVE)
+        {
+            int32_t xFixed, yFixed;
+            uint16_t speedFixed;
+            openedFile.read((uint8_t *)&xFixed, 4);
+            openedFile.read((uint8_t *)&yFixed, 4);
+            openedFile.read((uint8_t *)&speedFixed, 2);
+            targetPosition = Movement::Point(xFixed / MURAL_COORDINATE_SCALE, yFixed / MURAL_COORDINATE_SCALE);
+            return new InterpolatingMovementTask(movement, targetPosition, speedFixed / MURAL_SPEED_SCALE);
         }
         else
         {
-            auto x = line.substring(0, line.indexOf(" ")).toDouble();
-            auto y = line.substring(line.indexOf(" ") + 1).toDouble();
-            targetPosition = Movement::Point(x, y);
-            return new InterpolatingMovementTask(movement, targetPosition);
+            Serial.println("Bad opcode in commands file: " + String(opcode));
+            throw std::invalid_argument("bad opcode");
         }
     }
     else
@@ -117,7 +125,6 @@ void Runner::run()
             if (progress != newProgress) {
                 Serial.println("Progress: " + String(newProgress));
                 progress = newProgress;
-                display->displayText(String(progress) + "%");
             }
 
         }

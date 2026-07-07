@@ -96,44 +96,12 @@ function init() {
             await checkIfExtendedToHome(extendToHomeTime);
         });
     });
-    
-    function getServoValueFromInputValue() {
-        const inputValue = parseInt($("#servoRange").val());
-        const value = 90 - inputValue;
-        let normalizedValue;
-        if (value < 0) {
-            normalizedValue = 0;
-        } else if (value > 90) {
-            normalizedValue = 90;
-        } else {
-            normalizedValue = value;
-        }
 
-        return normalizedValue;
-    }
-
-    $("#servoRange").on('input', $.throttle(250, function (e) {
-        const servoValue = getServoValueFromInputValue();
-        $.post("/setServo", {angle: servoValue});
-    }));
-
-    const stepVaule = 5;
-    $("#penMinus").click(function() {
-        $("#servoRange")[0].stepDown(stepVaule);
-        $("#servoRange").trigger('input');
-    });
-
-    $("#penPlus").click(function() {
-        $("#servoRange")[0].stepUp(stepVaule);
-        $("#servoRange").trigger('input');
-    });
-
-    $("#setPenDistance").click(function () {
-        const inputValue = getServoValueFromInputValue();
+    $("#confirmPenCalibration").click(function () {
         doneWithPhase({
-            url: "/setPenDistance",
-            data: {angle: inputValue},
-            commandName: "Set Pen Distance",
+            url: "/confirmPenCalibration",
+            data: {},
+            commandName: "Confirm Pen Calibration",
         });
     });
 
@@ -264,7 +232,7 @@ function init() {
             } else if (e.data.type === 'renderer') {
                 console.log("Worker finished!");
 
-                uploadConvertedCommands = e.data.payload.commands.join('\n');
+                uploadConvertedCommands = e.data.payload.binary; // ArrayBuffer, uploaded as-is
                 const resultSvgJson = e.data.payload.svgJson;
                 const resultDataUrl = svgControl.convertJsonToDataURL(resultSvgJson, svgControl.getTargetWidth(), svgControl.getTargetHeight());
 
@@ -352,7 +320,7 @@ function init() {
         $("#acceptSvg").attr("disabled", "disabled");
 
         const commandsBlob = new Blob([uploadConvertedCommands], {
-            type: "text/plain"
+            type: "application/octet-stream"
         });
 
         $(".muralSlide").hide();
@@ -527,7 +495,6 @@ function adaptToState(state) {
             }
             break;
         case "PenCalibration":
-            $.post("/setServo", {angle: 90});
             $("#penCalibrationSlide").show();
             break;
         case "SvgSelect":
