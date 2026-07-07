@@ -188,3 +188,154 @@ collapsed away entirely - the two shapes draw as one continuous stroke rather
 than two separate ones. Whether that's desirable depends on artistic intent,
 so I didn't change it, but it's worth knowing about if you ever see two
 shapes that should be separate come out connected.
+
+---
+
+## 7. Import formats beyond SVG (PNG, JPG, GIF, BMP, WebP)
+
+**Before touching anything, I checked what already existed** - the codebase
+already has a full raster-to-vector tracer (`tsc/src/vectorizer.ts`, using a
+bundled Potrace port in `tracer.js`), complete with a "Despeckle" density
+slider already in the UI. It just wasn't wired up to direct file upload -
+it was only used internally, to re-trace an *already-uploaded SVG* after
+rasterizing it (the existing "Vector → Raster → Vector" mode). So this
+wasn't "build a vectorization engine," it was "expose the one that's already
+built and tested to a new entry point." No worker/backend changes were
+needed anywhere - this is a `data/www` (frontend) only change.
+
+**How it works:** `data/www/svgControl.js` (untouched) - the pan/zoom/
+positioning system - is built entirely around parsing the uploaded content
+as an SVG DOM and wrapping it in a transform group it manipulates directly.
+Rather than teaching it to understand raster pixels natively, an uploaded
+raster image now gets wrapped in a minimal synthetic SVG:
+
+```html
+<svg xmlns="http://www.w3.org/2000/svg" width="W" height="H" viewBox="0 0 W H">
+  <image href="data:image/png;base64,..." x="0" y="0" width="W" height="H" />
+</svg>
+```
+
+This reuses 100% of the existing pan/zoom/preview machinery unchanged, since
+it only ever manipulates the SVG's transform group regardless of what's
+inside it. When it's time to trace, the *existing* Vector → Raster → Vector
+mode already rasterizes whatever's in the SVG and runs it through Potrace -
+tracing a photo embedded this way is mechanically identical to what already
+happens today for line-art SVGs in that mode.
+
+**What changed:**
+- `data/www/index.html` - `accept=".svg"` → `accept=".svg,.png,.jpg,.jpeg,.gif,.bmp,.webp"`,
+  updated instructions.
+- `data/www/main.js` - `getUploadedSvgString()` detects raster files (by MIME
+  type, falling back to extension) and wraps them via `wrapRasterAsSvg()`
+  instead of reading them as text. The "choose render mode" screen is skipped
+  for raster uploads - Path Tracing doesn't apply to a photo, since paper.js
+  can't decompose a raster `<image>` into line-art paths - going straight to
+  Vector → Raster → Vector, the only mode that makes sense.
+
+**Tested:** since this touches real browser-only APIs (`DOMParser`,
+`FileReader`, canvas) that don't run naturally outside a browser, I used
+`jsdom` to actually exercise the logic rather than just eyeballing it:
+- The synthetic SVG parses with zero parser errors, and `svgControl.js`'s
+  actual (copied, not reimplemented) `normalizeSvg()` width/height/viewBox
+  extraction produces exactly the expected values.
+- The transform-group wrapping happens correctly around the `<image>`
+  element - confirmed by looking it up post-normalization, not just assuming
+  the DOM manipulation worked.
+- Simulated a pan+zoom against the wrapped SVG using `svgControl.js`'s actual
+  (copied) `makeTransformedSvgWithHeight()` logic: the image survives cloning
+  and transform-attribute manipulation intact, matrix math comes out right.
+- `main.js` syntax-checked, full patch re-verified clean-room (fresh clone →
+  apply → firmware build → TS typecheck), all pass.
+
+**What isn't and can't be tested without a real browser:** the actual canvas
+rasterization step (`getCurrentSvgImageData()`, unchanged) rendering an SVG
+with an embedded raster `<image>` to get `ImageData` for Potrace. This is
+standard, well-supported SVG/canvas behavior that the unmodified function
+already relies on for arbitrary SVG content, so there's good reason to expect
+it works, but I can't execute it here to confirm. Also not tested: Potrace's
+actual tracing *quality* on a real photograph rather than the simple
+line-art SVGs it's used on today - despeckle/turdSize may need different
+default tuning for photos than for rasterized line art.
+
+---
+
+## 8. More fill styles (crosshatch, single-direction hatch, stippling)
+
+`tsc/src/infill.ts`'s original algorithm implemented exactly one pattern - a
+fixed 45° crosshatch grid, with only *density* (spacing) adjustable. There
+was no existing groundwork for multiple styles (unlike the raster-import
+feature above, where the tracer already existed) - this was genuinely new
+algorithm work, one implementation per style.
+
+**Two new styles added**, selectable from a new "Fill Style" dropdown next
+to the existing Infill Density slider:
+
+- **Single-direction hatch** - the same 45° angle as crosshatch, but only one
+  of the two directions. About half the ink of crosshatch at the same
+  density (confirmed by test: ratio consistently ~0.50-0.53 across density
+  levels 1-4).
+- **Stippling** - fills with jittered dots instead of lines. Each dot is a
+  very short line segment (firmware only understands move/pen-up/pen-down,
+  so a "dot" is a pen-down stub short enough the pen width renders it as a
+  mark - not a new primitive type). Uses a fixed-seed deterministic PRNG
+  (mulberry32, not `Math.random()`) so re-rendering the same image produces
+  identical stippling rather than different dots each time.
+
+**How it's plumbed through:** new `FillStyle` type in `types.ts`
+(`'crosshatch' | 'singleHatch' | 'stippling'`), threaded through
+`RenderSVGRequest` → `toCommands.ts` → `generateInfills()`. The worker's
+request validation (`main.ts`) checks it's one of the known values, same as
+every other field. Frontend: a `<select>` in the drawing-preview slide,
+included in both render-request construction sites and the re-render-on-change
+listener alongside the existing density/despeckle/flatten controls.
+
+**Refactor to support multiple styles, done carefully to avoid changing the
+default behavior:** the original crosshatch code generated its two diagonal
+line directions with a shared loop that only worked because ±45° are mirror
+images of each other. Supporting single-hatch at an arbitrary angle needed a
+properly general "parallel lines at any angle" function, not just the old
+formula with a sign flipped in the wrong place (which I initially got wrong -
+a naive angle negation leaves gaps in viewport coverage; the actual general
+bounds need `start = -max(0, xOffset)`, `end = width - min(0, xOffset)`,
+derived from where the covering lines can start, not assumed from the
+symmetric 45° case).
+
+**Tested (headless Node, not mocks):**
+- **Regression test against the original algorithm**: extracted the
+  pre-refactor crosshatch code verbatim and compared against the refactored
+  version across 3 shapes (square, circle, star) and all 5 density levels
+  (15 combinations). Line-by-line index comparison initially showed
+  "mismatches" - investigating showed these were purely an *ordering*
+  difference (the refactor generates all of one diagonal direction then the
+  other, instead of interleaving them), not a geometry difference. Re-ran as
+  an unordered set comparison: all 15 combinations produce byte-identical
+  sets of infill lines. Order doesn't matter functionally anyway, since
+  `optimizer.ts`/`orOpt.ts` already reorder every path for efficient drawing
+  regardless of generation order.
+- **singleHatch**: line count consistently ~50% of crosshatch at the same
+  density, across 4 density levels.
+- **Stippling**: dot count scales with density (0 → 112 → 223 → 454 → 901 for
+  a fixed test square across levels 0-4), every dot's center verified inside
+  the shape boundary, confirmed deterministic across separate calls with the
+  same input.
+- **Shared logic** (skip white-filled shapes, outline extraction) verified
+  behaving identically across all three styles, not just crosshatch.
+- **Full pipeline test**: ran a real SVG through `renderSvgJsonToCommands()`
+  (not just `infill.ts` in isolation) with each fill style - confirmed
+  meaningfully different total/draw distances per style, including
+  stippling's expected signature (high total distance from travel between
+  dots, low actual drawn/ink distance).
+- Full patch re-verified clean-room: fresh clone → apply → firmware build →
+  TS typecheck, all pass.
+- Also fixed: a pre-existing Node-only dev test harness (`tsc/src/tester.ts`,
+  not part of the shipped bundle) had two hardcoded request objects that
+  needed the new required `fillStyle` field added to keep typechecking.
+
+**What's not and can't be tested without a real render:** how the two new
+styles actually *look* drawn out - stippling's jitter amount (currently 30%
+of dot spacing) and dot spacing table are reasonable starting points, not
+values tuned against real output. A concentric/contour fill style (lines that
+follow the shape's boundary inward) was considered but not attempted here -
+it's a substantially harder problem (needs real polygon offsetting, which
+paper.js doesn't provide out of the box) and is a reasonable candidate for
+follow-up if wanted.

@@ -1,8 +1,8 @@
 diff --git a/data/www/index.html b/data/www/index.html
-index 31959a2..dbfa760 100644
+index 31959a2..d5da3cb 100644
 --- a/data/www/index.html
 +++ b/data/www/index.html
-@@ -105,17 +105,8 @@
+@@ -105,21 +105,12 @@
        </div>
        <div id="penCalibrationSlide" class="muralSlide" style="display:none;">
          <h3 class="mb-2 fw-normal">Pen calibration</h3>
@@ -21,12 +21,40 @@ index 31959a2..dbfa760 100644
 +        <button class="w-100 btn btn-lg btn-primary mb-5" id="confirmPenCalibration">Pen is touching the wall</button>
        </div>
        <div id="svgUploadSlide" class="muralSlide" style="display:none;">
-         <h3 class="mb-2 fw-normal">Select SVG Image</h3>
+-        <h3 class="mb-2 fw-normal">Select SVG Image</h3>
+-        <h6 class="mb-2"><small class="text-muted">Use black and white line art SVGs for now</small></h6>
++        <h3 class="mb-2 fw-normal">Select Image</h3>
++        <h6 class="mb-2"><small class="text-muted">SVGs work best for line art. Photos and other images (PNG, JPG, GIF, BMP, WebP) will be traced automatically</small></h6>
+         <img id="sourceSvg" class="img-thumbnail mb-2 svg-control" style="display:none;width:100%;">
+         <div class="container svg-control mb-2" style="display: none;">
+           <div class="row">
+@@ -143,7 +134,7 @@
+             <h6><small class="text-muted" id="transformText"></small></h6>
+           </div>
+         </div>
+-        <input class="form-control form-control-lg mb-2" id="uploadSvg" type="file" accept=".svg">
++        <input class="form-control form-control-lg mb-2" id="uploadSvg" type="file" accept=".svg,.png,.jpg,.jpeg,.gif,.bmp,.webp">
+         <button class="w-100 btn btn-lg btn-primary mb-6" id="preview" disabled>Preview drawing</button>
+       </div>
+       <div id="chooseRendererSlide" class="muralSlide" style="display:none;">
+@@ -159,6 +150,12 @@
+           <div class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar" id="progressBar" style="width: 100%;" aria-valuenow="100" aria-valuemin="0" aria-valuemax="100"></div>
+         </div>
+         <h6 class="mb-2 fw-normal svg-preview" style="display: none;" id="distances"></h6>
++        <label for="fillStyle" class="form-label mb-0">Fill Style</label>
++        <select class="form-select mb-2" id="fillStyle">
++          <option value="crosshatch" selected>Crosshatch</option>
++          <option value="singleHatch">Single-direction hatch</option>
++          <option value="stippling">Stippling (dots)</option>
++        </select>
+         <label for="infillDensity" class="form-label mb-0">Infill Density</label>
+         <input type="range" class="form-range mb-2 text-center" min="0" max="4" step="1" id="infillDensity" value="0">
+         <label for="turdSize" class="form-label mb-0">Despeckle</label>
 diff --git a/data/www/main.js b/data/www/main.js
-index 1cfd225..546ebd4 100644
+index 1cfd225..29e58e2 100644
 --- a/data/www/main.js
 +++ b/data/www/main.js
-@@ -96,44 +96,12 @@ function init() {
+@@ -96,54 +96,78 @@ function init() {
              await checkIfExtendedToHome(extendToHomeTime);
          });
      });
@@ -42,40 +70,123 @@ index 1cfd225..546ebd4 100644
 -        } else {
 -            normalizedValue = value;
 -        }
--
+ 
 -        return normalizedValue;
--    }
--
++    $("#confirmPenCalibration").click(function () {
++        doneWithPhase({
++            url: "/confirmPenCalibration",
++            data: {},
++            commandName: "Confirm Pen Calibration",
++        });
++    });
++
++    // Raster images (PNG/JPG/GIF/BMP/WebP) get wrapped in a minimal synthetic SVG
++    // containing a single <image> element, rather than being handled as a separate code
++    // path. This lets them reuse the entire existing pan/zoom/positioning system in
++    // svgControl.js unchanged, since that machinery only ever manipulates the SVG's
++    // transform group - it doesn't care what's inside it. Tracing then happens through
++    // the *existing* Vector -> Raster -> Vector mode, which already rasterizes whatever
++    // is in the SVG (including an embedded photo) and runs it through Potrace - so no
++    // changes were needed anywhere in the worker/backend pipeline for this.
++    let uploadedFileIsRaster = false;
++
++    function isRasterImageFile(file) {
++        if (file.type && file.type.startsWith("image/") && file.type !== "image/svg+xml") {
++            return true;
++        }
++        // Fall back to the extension - some browsers/OSes don't set file.type reliably.
++        return /\.(png|jpe?g|gif|bmp|webp)$/i.test(file.name);
+     }
+ 
 -    $("#servoRange").on('input', $.throttle(250, function (e) {
 -        const servoValue = getServoValueFromInputValue();
 -        $.post("/setServo", {angle: servoValue});
 -    }));
--
++    function fileToDataUrl(file) {
++        return new Promise((resolve, reject) => {
++            const reader = new FileReader();
++            reader.onload = () => resolve(reader.result);
++            reader.onerror = reject;
++            reader.readAsDataURL(file);
++        });
++    }
+ 
 -    const stepVaule = 5;
 -    $("#penMinus").click(function() {
 -        $("#servoRange")[0].stepDown(stepVaule);
 -        $("#servoRange").trigger('input');
 -    });
--
++    function loadImageNaturalSize(dataUrl) {
++        return new Promise((resolve, reject) => {
++            const img = new Image();
++            img.onload = () => resolve({ width: img.naturalWidth, height: img.naturalHeight });
++            img.onerror = reject;
++            img.src = dataUrl;
++        });
++    }
+ 
 -    $("#penPlus").click(function() {
 -        $("#servoRange")[0].stepUp(stepVaule);
 -        $("#servoRange").trigger('input');
 -    });
++    function escapeXmlAttribute(value) {
++        return value.replace(/&/g, "&amp;").replace(/"/g, "&quot;");
++    }
  
 -    $("#setPenDistance").click(function () {
 -        const inputValue = getServoValueFromInputValue();
-+    $("#confirmPenCalibration").click(function () {
-         doneWithPhase({
+-        doneWithPhase({
 -            url: "/setPenDistance",
 -            data: {angle: inputValue},
 -            commandName: "Set Pen Distance",
-+            url: "/confirmPenCalibration",
-+            data: {},
-+            commandName: "Confirm Pen Calibration",
-         });
-     });
+-        });
+-    });
++    async function wrapRasterAsSvg(file) {
++        const dataUrl = await fileToDataUrl(file);
++        const { width, height } = await loadImageNaturalSize(dataUrl);
++        if (!width || !height) {
++            throw new Error("Could not read image dimensions");
++        }
++        const safeDataUrl = escapeXmlAttribute(dataUrl);
++        return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><image href="${safeDataUrl}" x="0" y="0" width="${width}" height="${height}" /></svg>`;
++    }
  
-@@ -264,7 +232,7 @@ function init() {
+     async function getUploadedSvgString() {
+         const [file] = $("#uploadSvg")[0].files;
+-        if (file) {
+-            return await file.text();
+-        } else {
++        if (!file) {
+             return null;
+         }
++
++        if (isRasterImageFile(file)) {
++            uploadedFileIsRaster = true;
++            return await wrapRasterAsSvg(file);
++        } else {
++            uploadedFileIsRaster = false;
++            return await file.text();
++        }
+     }
+ 
+     $("#uploadSvg").change(async function() {
+@@ -157,6 +181,7 @@ function init() {
+             $("#preview").attr("disabled", "disabled");
+             $(".svg-control").hide();
+             $("#infillDensity").val(0);
++            $("#fillStyle").val("crosshatch");
+             $("#turdSize").val(2);
+         }
+     });
+@@ -255,6 +280,7 @@ function init() {
+             homeX: currentState.homeX,
+             homeY: currentState.homeY,
+             infillDensity: getInfillDensity(),
++            fillStyle: getFillStyle(),
+             flattenPaths: getFlattenPaths(),
+         }
+ 
+@@ -264,7 +290,7 @@ function init() {
              } else if (e.data.type === 'renderer') {
                  console.log("Worker finished!");
  
@@ -84,7 +195,61 @@ index 1cfd225..546ebd4 100644
                  const resultSvgJson = e.data.payload.svgJson;
                  const resultDataUrl = svgControl.convertJsonToDataURL(resultSvgJson, svgControl.getTargetWidth(), svgControl.getTargetHeight());
  
-@@ -352,7 +320,7 @@ function init() {
+@@ -299,15 +325,34 @@ function init() {
+     }
+ 
+ 
+-    $("#infillDensity,#turdSize,#flattenPathsCheckbox").on('input change', async function() {
++    $("#infillDensity,#fillStyle,#turdSize,#flattenPathsCheckbox").on('input change', async function() {
+         activateProgressBar();
+         $("#acceptSvg").attr("disabled", "disabled");
+         await rendererFn();
+     });
+ 
+-    $("#preview").click(async function() {
++    async function enterVectorRasterVectorMode() {
++        $("#flattenPathsCheckbox").prop("checked", false);
++        $("label[for='turdSize'],#turdSize").show();
++        $("label[for='flattenPathsCheckbox'],#flattenPathsCheckbox").hide();
++
++        $("#chooseRendererSlide").hide();
+         $("#svgUploadSlide").hide();
+-        $("#chooseRendererSlide").show();
++        $("#drawingPreviewSlide").show();
++        rendererFn = render_VectorRasterVector;
++        await rendererFn();
++    }
++
++    $("#preview").click(async function() {
++        if (uploadedFileIsRaster) {
++            // Path Tracing doesn't apply to a photo - paper.js can't decompose a raster
++            // <image> into line-art paths - so skip the choice screen and go straight
++            // to the only mode that makes sense.
++            await enterVectorRasterVectorMode();
++        } else {
++            $("#svgUploadSlide").hide();
++            $("#chooseRendererSlide").show();
++        }
+     });
+ 
+     $("#pathTracing").click(async function() {
+@@ -321,14 +366,7 @@ function init() {
+     });
+ 
+     $("#vectorRasterVector").click(async function() {
+-        $("#flattenPathsCheckbox").prop("checked", false);
+-        $("label[for='turdSize'],#turdSize").show();
+-        $("label[for='flattenPathsCheckbox'],#flattenPathsCheckbox").hide();
+-
+-        $("#chooseRendererSlide").hide();
+-        $("#drawingPreviewSlide").show();
+-        rendererFn = render_VectorRasterVector;
+-        await rendererFn();
++        await enterVectorRasterVectorMode();
+     });
+ 
+     $(".backToSvgSelect").click(function() {
+@@ -352,7 +390,7 @@ function init() {
          $("#acceptSvg").attr("disabled", "disabled");
  
          const commandsBlob = new Blob([uploadConvertedCommands], {
@@ -93,7 +258,7 @@ index 1cfd225..546ebd4 100644
          });
  
          $(".muralSlide").hide();
-@@ -527,7 +495,6 @@ function adaptToState(state) {
+@@ -527,7 +565,6 @@ function adaptToState(state) {
              }
              break;
          case "PenCalibration":
@@ -101,6 +266,22 @@ index 1cfd225..546ebd4 100644
              $("#penCalibrationSlide").show();
              break;
          case "SvgSelect":
+@@ -550,6 +587,15 @@ function getInfillDensity() {
+     }
+ }
+ 
++function getFillStyle() {
++    const style = $("#fillStyle").val();
++    if (["crosshatch", "singleHatch", "stippling"].includes(style)) {
++        return style;
++    } else {
++        throw new Error('Invalid fill style');
++    }
++}
++
+ function getTurdSize() {
+     return parseInt($("#turdSize").val());
+ }
 diff --git a/platformio.ini b/platformio.ini
 index 860caad..224ce65 100644
 --- a/platformio.ini
@@ -995,10 +1176,240 @@ index 0000000..41d1d69
 +    return buffer;
 +}
 +
+diff --git a/tsc/src/infill.ts b/tsc/src/infill.ts
+index 95b0794..090b045 100644
+--- a/tsc/src/infill.ts
++++ b/tsc/src/infill.ts
+@@ -1,57 +1,110 @@
+ import { loadPaper } from './paperLoader';
+-import { InfillDensity, InfilledPath } from './types';
++import { InfillDensity, InfilledPath, FillStyle } from './types';
+ 
+ const paper = loadPaper();
+ 
+-const infillDensityToSpacingMap = new Map<Exclude<InfillDensity, 0>, number>([
++// Perpendicular spacing (mm-equivalent units) between adjacent hatch lines, per density
++// level. Shared by both hatching styles - the two only differ in how many directions of
++// line get drawn, not in how dense a given density level looks.
++const hatchDensityToSpacingMap = new Map<Exclude<InfillDensity, 0>, number>([
+     [1, 20],
+     [2, 15],
+     [3, 10],
+     [4, 7],
+ ]);
+ 
+-const infillAngle = Math.PI / 4;
++// Approximate spacing between candidate dot positions, per density level. Tuned
++// separately from hatching since a visually-comparable "density" for dots needs a
++// different scale than for lines - these are starting points, not measured values.
++const stipplingDensityToSpacingMap = new Map<Exclude<InfillDensity, 0>, number>([
++    [1, 14],
++    [2, 10],
++    [3, 7],
++    [4, 5],
++]);
+ 
+-export function generateInfills(pathsToInfill: paper.PathItem[], infillDensity: InfillDensity): InfilledPath[] {
+-    const view = paper.project.view;
+-    const xOffset = view.size.height * Math.tan(infillAngle);
++const hatchAngle = Math.PI / 4;
++
++// Each stippling dot is drawn as a very short line rather than a filled circle -
++// firmware only understands move/pen-up/pen-down, so a "dot" is just a pen-down stub
++// short enough that the pen width renders it as a mark, consistent with how every other
++// drawn primitive in this codebase becomes a move sequence rather than a new primitive
++// type.
++const DOT_HALF_LENGTH = 0.4;
++
++export function generateInfills(pathsToInfill: paper.PathItem[], infillDensity: InfillDensity, fillStyle: FillStyle = 'crosshatch'): InfilledPath[] {
++    if (fillStyle === 'stippling') {
++        return generateStipplingInfills(pathsToInfill, infillDensity);
++    }
++    return generateHatchInfills(pathsToInfill, infillDensity, fillStyle);
++}
++
++function shouldSkipFill(path: paper.PathItem): boolean {
++    return !!(path.fillColor && path.fillColor.toCSS(true) === '#ffffff' && !path.strokeColor);
++}
++
++function isWhiteFilled(path: paper.PathItem): boolean {
++    return !!(path.fillColor && path.fillColor.toCSS(true) === '#ffffff');
++}
++
++function extractOutlinePaths(path: paper.PathItem): paper.Path[] {
++    if (path instanceof paper.Path) {
++        return (path.firstSegment && path.lastSegment) ? [path] : [];
++    } else if (path instanceof paper.CompoundPath) {
++        return unwrapCompoundPath(path).filter(p => p.firstSegment && p.lastSegment);
++    } else {
++        throw new Error("Path item is neither a Path or CompoundPath");
++    }
++}
++
++// Generates parallel candidate lines at `angle` (radians, measured the same way the
++// original code measured its fixed 45-degree hatch: xOffset = height * tan(angle)),
++// spaced `spacing` apart perpendicular to their own direction, fully covering the
++// viewport regardless of the sign of the angle. When angle is exactly the original
++// hatch's +45 degrees this produces bit-for-bit the same candidate lines as the
++// pre-refactor code; the bounds generalize correctly to any angle (see
++// MURAL_FORK_README.md for the derivation - it's not just the old formula with a
++// plugged-in negative angle, which would leave gaps in coverage).
++function generateParallelLines(view: paper.View, angle: number, spacing: number): paper.Path.Line[] {
+     const lines: paper.Path.Line[] = [];
++    const xOffset = view.size.height * Math.tan(angle);
++    const start = -Math.max(0, xOffset);
++    const end = view.size.width - Math.min(0, xOffset);
++    for (let currentX = start; currentX < end; currentX += spacing) {
++        lines.push(new paper.Path.Line({ x: currentX, y: 0 }, { x: currentX + xOffset, y: view.size.height }));
++    }
++    return lines;
++}
++
++function generateHatchInfills(pathsToInfill: paper.PathItem[], infillDensity: InfillDensity, fillStyle: 'crosshatch' | 'singleHatch'): InfilledPath[] {
++    const view = paper.project.view;
++    let lines: paper.Path.Line[] = [];
+ 
+     let minInfillLength = 1000;
+-    if (infillDensity != 0) {
+-        const infillSpacing = infillDensityToSpacingMap.get(infillDensity)!;
++    if (infillDensity !== 0) {
++        const infillSpacing = hatchDensityToSpacingMap.get(infillDensity)!;
+         minInfillLength = Math.floor(infillSpacing);
+-        const infillXSpacing = infillSpacing * Math.sqrt(2);
+-        for (let currentX = -xOffset; currentX < view.size.width; currentX = currentX + infillXSpacing) {
+-            lines.push(new paper.Path.Line({x: currentX, y: 0}, {x: currentX + xOffset, y: view.size.height}));
+-            lines.push(new paper.Path.Line({x: currentX, y: view.size.height}, {x: currentX + xOffset, y: 0}));
++        // to achieve a perpendicular spacing of infillSpacing at this angle, adjacent
++        // lines' x-intercepts need to be infillSpacing / cos(angle) apart
++        const xSpacing = infillSpacing / Math.cos(hatchAngle);
++
++        lines = generateParallelLines(view, hatchAngle, xSpacing);
++        if (fillStyle === 'crosshatch') {
++            lines = lines.concat(generateParallelLines(view, -hatchAngle, xSpacing));
+         }
+     }
+ 
+     const boundsPath = new paper.Path.Rectangle(view.bounds);
+-    
++
+     const infilledPaths = pathsToInfill.map(path => {
+-        if (path.fillColor && path.fillColor.toCSS(true) === '#ffffff' && !path.strokeColor) {
++        if (shouldSkipFill(path)) {
+             return null;
+         }
+ 
+-        const outlinePaths: paper.Path[] = [];
+-        
+-        if (path instanceof paper.Path) {
+-            if (path.firstSegment && path.lastSegment) {
+-                outlinePaths.push(path);
+-            }
+-            
+-        } else if (path instanceof paper.CompoundPath) {
+-            const unwoundPaths = unwrapCompoundPath(path).filter(p => p.firstSegment && p.lastSegment);
+-            outlinePaths.push(...unwoundPaths);
+-        } else {
+-            throw new Error("Path item is neither a Path or CompoundPath");
+-        }
+-
++        const outlinePaths = extractOutlinePaths(path);
+         const infillPaths: paper.Path[] = [];
+ 
+-        if (!path.fillColor || path.fillColor.toCSS(true) !== '#ffffff') {
++        if (!isWhiteFilled(path)) {
+             for (const line of lines) {
+                 const intersections = [...path.getIntersections(line), ...boundsPath.getIntersections(line)].filter(i => i.point.isInside(boundsPath.bounds));
+ 
+@@ -98,6 +151,76 @@ export function generateInfills(pathsToInfill: paper.PathItem[], infillDensity:
+     return infilledPaths;
+ }
+ 
++// Deterministic pseudo-random generator (mulberry32) rather than Math.random(), so
++// rendering the same SVG twice produces identical stippling both times - useful for
++// testing, and arguably better for users too (predictable output rather than silently
++// different dots on every re-render).
++function makePseudoRandom(seed: number): () => number {
++    let a = seed;
++    return function () {
++        a |= 0;
++        a = (a + 0x6D2B79F5) | 0;
++        let t = Math.imul(a ^ (a >>> 15), 1 | a);
++        t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
++        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
++    };
++}
++
++function makeDotPath(center: paper.Point): paper.Path {
++    return new paper.Path.Line(
++        new paper.Point(center.x - DOT_HALF_LENGTH, center.y),
++        new paper.Point(center.x + DOT_HALF_LENGTH, center.y),
++    );
++}
++
++function generateStipplingInfills(pathsToInfill: paper.PathItem[], infillDensity: InfillDensity): InfilledPath[] {
++    const view = paper.project.view;
++    const boundsRect = view.bounds;
++
++    const random = makePseudoRandom(1); // fixed seed - see makePseudoRandom's comment
++
++    const infilledPaths = pathsToInfill.map(path => {
++        if (shouldSkipFill(path)) {
++            return null;
++        }
++
++        const outlinePaths = extractOutlinePaths(path);
++        const infillPaths: paper.Path[] = [];
++
++        if (infillDensity !== 0 && !isWhiteFilled(path)) {
++            const dotSpacing = stipplingDensityToSpacingMap.get(infillDensity)!;
++            const bounds = path.bounds.intersect(boundsRect);
++
++            let rowIndex = 0;
++            for (let y = bounds.top; y <= bounds.bottom; y += dotSpacing) {
++                // offset alternating rows by half a step, and jitter each point within a
++                // fraction of the spacing - both standard techniques to avoid the fill
++                // reading as a mechanical grid rather than organic stippling
++                const rowOffset = (rowIndex % 2 === 0) ? 0 : dotSpacing / 2;
++                for (let x = bounds.left + rowOffset; x <= bounds.right; x += dotSpacing) {
++                    const jitterX = (random() - 0.5) * dotSpacing * 0.3;
++                    const jitterY = (random() - 0.5) * dotSpacing * 0.3;
++                    const point = new paper.Point(x + jitterX, y + jitterY);
++                    if (path.contains(point)) {
++                        infillPaths.push(makeDotPath(point));
++                    }
++                }
++                rowIndex++;
++            }
++        }
++
++        const infilledPath: InfilledPath = {
++            originalPath: path,
++            infillPaths,
++            outlinePaths,
++        };
++
++        return infilledPath;
++    }).filter((ip) => !!ip) as InfilledPath[];
++
++    return infilledPaths;
++}
++
+ function getMidPoint(point1: paper.Point, point2: paper.Point): paper.Point {
+     return new paper.Point(
+         point1.x + (point2.x - point1.x) / 2,
 diff --git a/tsc/src/main.ts b/tsc/src/main.ts
-index 874192f..e685690 100644
+index 874192f..947830b 100644
 --- a/tsc/src/main.ts
 +++ b/tsc/src/main.ts
+@@ -1,7 +1,7 @@
+ import { renderCommandsToSvgJson } from "./toSvgJson";
+ import { renderSvgJsonToCommands } from "./toCommands";
+ import { vectorizeImageData } from './vectorizer';
+-import { InfillDensities, RequestTypes } from "./types";
++import { InfillDensities, FillStyles, RequestTypes } from "./types";
+ 
+ const updateStatusFn = (status: string) => {
+     self.postMessage({
 @@ -41,6 +41,7 @@ async function render(request: RequestTypes.RenderSVGRequest) {
          type: "renderer",
          payload: {
@@ -1007,6 +1418,17 @@ index 874192f..e685690 100644
              svgJson: resultSvgJson,
              distance: renderResult.distance,
              drawDistance: renderResult.drawDistance,
+@@ -102,6 +103,10 @@ function isRenderSvgRequest(obj: any): obj is RequestTypes.RenderSVGRequest {
+         return false;
+     }
+ 
++    if (!('fillStyle' in obj) || typeof obj.fillStyle !== 'string' || !FillStyles.includes(obj.fillStyle)) {
++        return false;
++    }
++
+     if (!('flattenPaths' in obj) || typeof obj.flattenPaths !== 'boolean') {
+         return false;
+     }
 diff --git a/tsc/src/orOpt.ts b/tsc/src/orOpt.ts
 new file mode 100644
 index 0000000..97cbf0f
@@ -1120,8 +1542,28 @@ index 0000000..97cbf0f
 +
 +    return tour;
 +}
+diff --git a/tsc/src/tester.ts b/tsc/src/tester.ts
+index 1caad9c..48ac90b 100644
+--- a/tsc/src/tester.ts
++++ b/tsc/src/tester.ts
+@@ -47,6 +47,7 @@ async function main_vectorRasterVector() {
+                     homeX: 0,
+                     homeY: 0,
+                     infillDensity: 4,
++                    fillStyle: 'crosshatch',
+                     type: 'renderSvg',
+                     flattenPaths: false,
+                 };
+@@ -144,6 +145,7 @@ async function main_pathTracer() {
+                     homeX: 0,
+                     homeY: 0,
+                     infillDensity: 0,
++                    fillStyle: 'crosshatch',
+                     type: 'renderSvg',
+                     flattenPaths: false,
+                 };
 diff --git a/tsc/src/toCommands.ts b/tsc/src/toCommands.ts
-index 2be7fed..48479f1 100644
+index 2be7fed..ecd93b8 100644
 --- a/tsc/src/toCommands.ts
 +++ b/tsc/src/toCommands.ts
 @@ -2,12 +2,15 @@ import { Command, RequestTypes, updateStatusFn } from './types';
@@ -1140,7 +1582,12 @@ index 2be7fed..48479f1 100644
  
  const paper = loadPaper();
  
-@@ -41,9 +44,10 @@ export async function renderSvgJsonToCommands(
+@@ -37,13 +40,14 @@ export async function renderSvgJsonToCommands(
+     }
+ 
+     updateStatusFn("Generating infill");
+-    const pathsWithInfills = generateInfills(paths, request.infillDensity);
++    const pathsWithInfills = generateInfills(paths, request.infillDensity, request.fillStyle);
  
      updateStatusFn("Optimizing paths");
      const optimizedPaths = optimizePaths(pathsWithInfills, request.homeX, request.homeY);
@@ -1183,7 +1630,7 @@ index 2be7fed..48479f1 100644
          drawDistance: +distances.drawDistance.toFixed(1),
      };
 diff --git a/tsc/src/types.ts b/tsc/src/types.ts
-index 3903134..d4069f6 100644
+index 3903134..6ec257c 100644
 --- a/tsc/src/types.ts
 +++ b/tsc/src/types.ts
 @@ -4,6 +4,8 @@ export type updateStatusFn = (status: string) => void;
@@ -1195,6 +1642,28 @@ index 3903134..d4069f6 100644
  }
  
  export type PenUpCommand = 'p0';
+@@ -22,6 +24,13 @@ export type InfilledPath = {
+ export type InfillDensity = 0 | 1 | 2 | 3 | 4;
+ export const InfillDensities: InfillDensity[] = [0, 1, 2, 3, 4];
+ 
++// 'crosshatch' is the original/default behavior (two diagonal directions). 'singleHatch'
++// is a lighter-weight single-direction hatch at the same angle. 'stippling' fills with
++// jittered dots instead of lines - a different pen-plotter aesthetic (pointillism-style)
++// rather than a variant of hatching.
++export type FillStyle = 'crosshatch' | 'singleHatch' | 'stippling';
++export const FillStyles: FillStyle[] = ['crosshatch', 'singleHatch', 'stippling'];
++
+ export namespace RequestTypes {
+     export type RenderSVGRequest = {
+         type: 'renderSvg',
+@@ -33,6 +42,7 @@ export namespace RequestTypes {
+         homeX: number,
+         homeY: number,
+         infillDensity: InfillDensity,
++        fillStyle: FillStyle,
+         flattenPaths: boolean,
+     };
+ 
 diff --git a/tsc/src/velocityPlanner.ts b/tsc/src/velocityPlanner.ts
 new file mode 100644
 index 0000000..fd0b7ec
